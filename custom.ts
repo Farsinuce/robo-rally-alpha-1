@@ -473,18 +473,21 @@ namespace roboRally {
         const data = control.createBuffer(4 + w * h)
         data.setNumber(NumberFormat.UInt16LE, 0, w)
         data.setNumber(NumberFormat.UInt16LE, 2, h)
+        // Gallery tiles on purpose. A kid can delete a project tile in the
+        // asset editor, and a dangling myTiles.* reference in here would fail
+        // the whole compile and take the Blocks view down with it.
         tiles.setCurrentTilemap(tiles.createTilemap(data, image.create(w, h), [
-            myTiles.floor, myTiles.wall, myTiles.lava,
-            myTiles.goal, myTiles.start], TileScale.Sixteen))
+            sprites.dungeon.floorLight0, sprites.dungeon.floorDark0, sprites.dungeon.hazardLava0,
+            sprites.dungeon.chestClosed, sprites.dungeon.stairLarge], TileScale.Sixteen))
         for (let row = 0; row < h; row++) {
             for (let col = 0; col < w; col++) {
                 const ch = rows[row].charAt(col)
                 const loc = tiles.getTileLocation(col, row)
-                let tile = myTiles.floor
-                if (ch == "#") tile = myTiles.wall
-                if (ch == "L") tile = myTiles.lava
-                if (ch == "G") tile = myTiles.goal
-                if (ch == "S") tile = myTiles.start
+                let tile = sprites.dungeon.floorLight0
+                if (ch == "#") tile = sprites.dungeon.floorDark0
+                if (ch == "L") tile = sprites.dungeon.hazardLava0
+                if (ch == "G") tile = sprites.dungeon.chestClosed
+                if (ch == "S") tile = sprites.dungeon.stairLarge
                 tiles.setTileAt(loc, tile)
                 if (ch == "#") tiles.setWallAt(loc, true)
             }
@@ -584,16 +587,7 @@ namespace roboRally {
      * pointing at each other would recurse until the stack gave out, so the
      * depth is capped here rather than inside either half.
      */
-    let stepDepth = 0
     function step(bot: Bot, dir: number, shove: boolean): boolean {
-        if (stepDepth >= MAX_TILE_CHAIN) return false
-        stepDepth++
-        const moved = stepOnce(bot, dir, shove)
-        stepDepth--
-        return moved
-    }
-
-    function stepOnce(bot: Bot, dir: number, shove: boolean): boolean {
         if (bot.dead) return false
         // A kid who forgot "set tilemap to" would otherwise crash on the very
         // first move card.
@@ -681,6 +675,16 @@ namespace roboRally {
         const spots = tiles.getTilesByType(bot.startTile)
         if (spots.length == 0) {
             bot.sprite.sayText("Hvor er startfeltet?", 1500)
+            // It may have just fallen off the edge. Anywhere on the board
+            // beats leaving it stranded outside, invisible, forever.
+            const here = bot.sprite.tilemapLocation()
+            if (offMap(here.column, here.row)) {
+                const tm = game.currentScene().tileMap
+                const mid = tiles.getTileLocation(tm.data.width >> 1, tm.data.height >> 1)
+                tiles.placeOnTile(bot.sprite, mid)
+                bot.landedCol = mid.column
+                bot.landedRow = mid.row
+            }
             return
         }
         // Prefer a start tile the other robot is not already standing on.
@@ -753,6 +757,7 @@ namespace roboRally {
      * teleporter), the rules for the new tile run too.
      */
     let landing = 0
+    let landBudget = 0
     function fireLanded(bot: Bot) {
         const previous = current
         current = bot
@@ -762,6 +767,14 @@ namespace roboRally {
         // and lets its caller carry on, so no tile's rules run twice.
         const passes = landing > 1 ? 1 : MAX_TILE_CHAIN
         for (let chain = 0; chain < passes; chain++) {
+            // Every landing anywhere in the cascade spends from the same pot,
+            // so two belts shoving each other back and forth stop instead of
+            // multiplying out. Say so, or it looks like the game just froze.
+            if (landBudget <= 0) {
+                bot.sprite.sayText("loop?", 900)
+                break
+            }
+            landBudget--
             const loc = bot.sprite.tilemapLocation()
             bot.landedCol = loc.column
             bot.landedRow = loc.row
@@ -791,6 +804,7 @@ namespace roboRally {
         for (let bot of bots) {
             if (bot.dead) continue
             const loc = bot.sprite.tilemapLocation()
+            landBudget = MAX_TILE_CHAIN
             for (let i = 0; i < betweenTiles.length; i++) {
                 if (tiles.tileAtLocationEquals(loc, betweenTiles[i])) {
                     current = bot
@@ -848,6 +862,7 @@ namespace roboRally {
                 // it - including the "<card> ?" warning for a misspelt card.
                 bot.sprite.sayText("")
                 current = bot
+                landBudget = MAX_TILE_CHAIN
                 playCard(card, bot)
                 checkLanded(bot)
                 current = null
