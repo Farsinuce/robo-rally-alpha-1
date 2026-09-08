@@ -20,7 +20,6 @@ let mySprite = sprites.create(img`
     . . . . . . . . . . . . . . . .
     `, SpriteKind.Player)
 tiles.setCurrentTilemap(tilemap`level1`)
-scene.cameraFollowSprite(mySprite)
 roboRally.addCards(3, "+1")
 roboRally.addCards(2, "+2")
 roboRally.addCards(1, "+3")
@@ -28,8 +27,9 @@ roboRally.addCards(1, "-1")
 roboRally.addCards(2, "V")
 roboRally.addCards(2, "H")
 roboRally.addCards(1, "U")
+roboRally.addCards(1, "S")
 roboRally.addCards(1, "P")
-roboRally.startGame(mySprite, sprites.dungeon.stairLarge)
+roboRally.startGame(mySprite, assets.tile`start`)
 
 // ---------------------------------------------------------------
 // Kortene: et blok-hoved for hvert kort i bunken
@@ -57,17 +57,33 @@ roboRally.onCardPlayed("U", function (robot) {
     roboRally.turnLeft()
     roboRally.turnLeft()
 })
+// S for skyd
+roboRally.onCardPlayed("S", function (robot) {
+    roboRally.shoot()
+})
 roboRally.onCardPlayed("P", function (robot) {
     robot.sayText("PRUT!", 700)
-    music.buzzer.play()
+    music.play(music.melodyPlayable(music.buzzer), music.PlaybackMode.InBackground)
 })
 
 // ---------------------------------------------------------------
 // Felterne: et blok-hoved for hvert felt du maler på banen
 // ---------------------------------------------------------------
-roboRally.onLand(sprites.dungeon.hazardLava0, function (robot) {
+roboRally.onLand(assets.tile`lava`, function (robot) {
     roboRally.die()
 })
-roboRally.onLand(sprites.dungeon.chestClosed, function (robot) {
+roboRally.onLand(assets.tile`hole`, function (robot) {
+    roboRally.die()
+})
+roboRally.onLand(assets.tile`goal`, function (robot) {
     roboRally.win()
+})
+
+// Transportbåndene: banen får sin egen tur efter hvert kort.
+// To felter, samme blok, hver sin retning i rullelisten.
+roboRally.onBetweenCards(assets.tile`conveyorRight`, function (robot) {
+    roboRally.push(RoboDirection.Right)
+})
+roboRally.onBetweenCards(assets.tile`conveyorLeft`, function (robot) {
+    roboRally.push(RoboDirection.Left)
 })
