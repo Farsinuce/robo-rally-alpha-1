@@ -4,6 +4,20 @@
         "mimeType": "image/x-mkcd-f4",
         "tilemapTile": true
     },
+    "level1": {
+        "id": "level1",
+        "mimeType": "application/mkcd-tilemap",
+        "data": "MTAwYTAwMDUwMDAyMDIwMjAyMDIwMjAyMDIwMjAyMDIwNTAxMDEwMTAxMDMwMTAxMDIwMjAxMDEwMjAxMDEwMjAxMDEwMjAyMDEwMzAxMDEwMTAxMDEwNDAyMDIwMjAyMDIwMjAyMDIwMjAyMDIyMjIyMjIyMjIyMDIwMDAwMDAyMDAyMjAwMDAyMjAwMjAwMDAwMDIwMjIyMjIyMjIyMg==",
+        "tileset": [
+            "myTiles.transparency16",
+            "sprites.dungeon.floorLight0",
+            "sprites.dungeon.floorDark0",
+            "sprites.dungeon.hazardLava0",
+            "sprites.dungeon.chestClosed",
+            "sprites.dungeon.stairLarge"
+        ],
+        "displayName": "level1"
+    },
     "*": {
         "mimeType": "image/x-mkcd-f4",
         "dataEncoding": "base64",

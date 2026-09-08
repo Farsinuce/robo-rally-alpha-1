@@ -10,3 +10,7 @@ _site
 *.tgz
 .header.json
 .simstate.json
+
+# local pxt CLI toolchain (pxt target arcade)
+package.json
+package-lock.json
