@@ -2,11 +2,13 @@
 // ROBO RALLY - lille udgave
 //
 // Spillet virker allerede: robotten kan koere frem og dreje til
-// hoejre, lava slaar dig ihjel, og den der aabner flest kister
+// hoejre, lava slaar dig ihjel, og den der naar kisten i midten
 // vinder. Men det er ogsaa ALT den kan.
 //
-// Kig paa banen. Der er transportbaand, lasere og huller - og de
-// goer ingenting endnu. Det er din opgave.
+// Banen er naesten tom, og der er en mur hele vejen rundt. I
+// tilemap-editoren ligger der ogsaa transportbaand, lasere og
+// huller - du skal bare male dem ind. Men de goer ingenting
+// foer DU skriver reglen for dem. Det er hele opgaven.
 // ---------------------------------------------------------------
 let mySprite = sprites.create(img`
     . . . . . . f f f f . . . . . .
@@ -57,8 +59,11 @@ roboRally.onCardPlayed("H", function (robot) {
 // Felterne: et blok-hoved for hvert felt du vil have til at virke
 // ---------------------------------------------------------------
 // Lava slaar dig ihjel. Du mister resten af din tur og kommer
-// igen paa den naermeste trappe. Hullerne paa banen goer stadig
-// ingenting - kan du give dem den samme regel?
+// igen paa den naermeste trappe.
+//
+// Naar du har malet et hul paa banen kan du give det den samme
+// regel. Og et transportbaand faar sin egen slags blok:
+// "naar robot staar paa ... mellem kort" + "skub robot".
 roboRally.onLand(assets.tile`lava`, function (robot) {
     roboRally.die()
 })
