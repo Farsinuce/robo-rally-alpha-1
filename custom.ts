@@ -159,7 +159,14 @@ namespace roboRally {
     // Badge 8 + a gap + a heart or a digit + a gap. Four of these is 68 px,
     // which leaves the right hand half of the row for the message.
     const SEAT_PITCH = 17
-    const UI_Z = 90
+    // Above the robot (95) and above a shot (96). The card strip is the one
+    // thing on this screen a kid has to be able to READ - four two-letter
+    // labels in a five pixel font - and a robot parked under it took the
+    // middle out of a card and left a word that could be anything. The strip
+    // is see-through anyway: a card is a frame around a dimmed hole, so a
+    // robot beneath one is still perfectly visible, just dimmed like the
+    // tiles around it. It only has to stay below the native HUD at 100.
+    const UI_Z = 98
 
     // The join overlay: a black card in the middle of a darkened board.
     const LOBBY_BOX_Y = 37
@@ -379,8 +386,9 @@ namespace roboRally {
     // again every frame, because the same project is built in the editor on
     // one screen and played online on two.
     let twoScreens = false
-    // ...and once this game has been hosted it stays hosted. See splitScreens.
-    let hosted = false
+    // ...and once a second view has been SEEN, there is a second view for
+    // the rest of the game. See splitScreens.
+    let twoViews = false
     // Set when "play with N robots" ran before "start Robo Rally".
     let wantRobots = 0
 
@@ -2203,14 +2211,28 @@ namespace roboRally {
         // unconditionally either way. So ask the strong question only.
         //
         // It is asked every frame but LATCHED, because the answer can only
-        // travel one way: a game that has ever been hosted is hosted for the
-        // rest of its life. A single frame in which the shim answered
-        // anything else would otherwise collapse two screens back into one
-        // in the middle of a round - and one screen means strict turns and
-        // one hand drawn on both, which is exactly what player 2 looking at
-        // player 1's cards would look like from the sofa.
-        if (getOrigin() == "server") hosted = true
-        return hosted
+        // travel one way: once a second view has been seen there is a second
+        // view for the rest of the game. A single frame answering otherwise
+        // would collapse two screens back into one in the middle of a round,
+        // and one screen means strict turns with one hand drawn on both.
+        if (getOrigin() == "server") { twoViews = true; return true }
+        // ...but hosting is not the only way to get two views, and assuming
+        // it was is what shipped a player 2 with no hand and nothing to do
+        // but wait. THE EDITOR HAS TWO VIEWS AS WELL, and it is where the
+        // kids will actually test two players, because hosting a game to try
+        // a card out is absurd. The extension renders both images no matter
+        // what; in the editor it blits the CLIENT one over the canvas
+        // whenever the active controller is not player 1, and
+        // drawServerScreen going false is exactly that moment.
+        //
+        // That is evidence of a kind controller.connected can never be. It
+        // does not mean "a button was pressed" - any press sets that, which
+        // is what made it useless - it means the extension has already put a
+        // second image in front of somebody. And it can never go false on
+        // real hardware, where nothing raises a player-joined event at all,
+        // so a handheld still gets the one-screen layout it needs.
+        if (!secondScreen._state().drawServerScreen) twoViews = true
+        return twoViews
     }
 
     /**
@@ -2328,9 +2350,8 @@ namespace roboRally {
             secondScreen.renderOnZIndex(UI_Z, secondScreen.DrawMode.JustClients,
                 function (target: Image) { drawUi(target, false) })
         } else {
-            // One renderable instead of forty card sprites. It draws after the
-            // tilemap and before the robot (z 95), which is the only point
-            // where "the tiles behind a card" still exist to be darkened - and
+            // One renderable instead of forty card sprites. It draws last of
+            // anything on the board, so the labels are never covered - and
             // unlike a sprite it can simply not draw a row, which is how rows
             // are hidden. (Moving a card off screen is not an option: mapRect
             // clamps rather than no-ops in the simulator, and would smear a
