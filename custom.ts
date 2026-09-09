@@ -1699,12 +1699,18 @@ namespace roboRally {
                 if (checkEnd()) return
             }
             // The board gets the same rhythm: say what is about to happen, let
-            // it happen, then a beat before the next register.
-            banner("BANEN", 1)
-            pause(BOARD_PAUSE)
-            boardPhase()
-            pause(BOARD_PAUSE)
-            banner("", 1)
+            // it happen, then a beat before the next register. But only if the
+            // kid has actually given the board something to do - in the
+            // starting project there is not one between-cards rule, and a
+            // silent BANEN pause on every register is a second of nothing,
+            // four times a round, in the version aimed at beginners.
+            if (betweenTiles.length > 0) {
+                banner("BANEN", 1)
+                pause(BOARD_PAUSE)
+                boardPhase()
+                pause(BOARD_PAUSE)
+                banner("", 1)
+            }
             if (checkEnd()) return
         }
     }
