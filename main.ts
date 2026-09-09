@@ -10,11 +10,10 @@
 // huller - du skal bare male dem ind. Men de goer ingenting
 // foer DU skriver reglen for dem. Det er hele opgaven.
 //
-// Flere af felterne findes to gange: en TAENDT og en SLUKKET
-// udgave (laserH og laserHOff, conveyorRight og conveyorRightOff,
-// og saa videre). Med blokken "... turns off to ..." sover feltet,
-// indtil banen faar sin tur - og trin-nummeret bestemmer
-// raekkefoelgen: trin 1 foer trin 2.
+// Baand og lasere kan sove, indtil banen faar sin tur. Blokken
+// "... only wakes up on board step ..." goer det, og trin-nummeret
+// bestemmer raekkefoelgen: trin 1 foer trin 2. Du vaelger kun det
+// felt du har malet - motoren tegner selv den slukkede udgave.
 // ---------------------------------------------------------------
 let mySprite = sprites.create(img`
     . . . . . . f f f f . . . . . .
@@ -73,9 +72,9 @@ roboRally.card("H", 4, function (robot) {
 //
 // En laser er den samme slags blok: "naar robot staar paa laserH
 // mellem kort" + "robot mister 1 hits". Vil du have den til at
-// taende og slukke, saa saet ogsaa "laserH turns off to laserHOff
-// on board step 2" op i starten - saa koerer baandene foerst og
-// laserne bagefter.
+// sove imellem, saa saet ogsaa "laserH only wakes up on board step
+// 2" op i starten - saa koerer baandene foerst (trin 1) og laserne
+// bagefter (trin 2).
 roboRally.onLand(assets.tile`lava`, function (robot) {
     roboRally.die()
 })
