@@ -88,11 +88,11 @@ namespace roboRally {
     // Your turn starts the moment the camera reaches you. Three seconds is
     // long enough to press A and short enough that four kids keep moving.
     const TURN_TIMEOUT = 3000
-    // The sand timer, and it is not running until somebody turns it. Fifteen
+    // The sand timer, and it is not running until somebody turns it. Twenty
     // seconds from the moment the FIRST program card of the phase goes down -
     // the way a real Robo Rally table flips the hourglass - so nobody is under
     // pressure before they have even read their hand.
-    const HOURGLASS = 15000
+    const HOURGLASS = 20000
     // ...but a timer nobody ever starts is a frozen table. If not one card has
     // been committed in this long, the phase ends anyway.
     const PROGRAM_IDLE = 45000
@@ -159,14 +159,23 @@ namespace roboRally {
     // Badge 8 + a gap + a heart or a digit + a gap. Four of these is 68 px,
     // which leaves the right hand half of the row for the message.
     const SEAT_PITCH = 17
-    // Above the robot (95) and above a shot (96). The card strip is the one
-    // thing on this screen a kid has to be able to READ - four two-letter
-    // labels in a five pixel font - and a robot parked under it took the
-    // middle out of a card and left a word that could be anything. The strip
-    // is see-through anyway: a card is a frame around a dimmed hole, so a
-    // robot beneath one is still perfectly visible, just dimmed like the
-    // tiles around it. It only has to stay below the native HUD at 100.
+    // The CARDS sit above the robot (95) and above a shot (96). The strip is
+    // the one thing on this screen a kid has to be able to READ - four
+    // two-letter labels in a five pixel font - and a robot parked under it
+    // took the middle out of a card and left a word that could be anything.
+    // Nothing is lost by it, because the strip is see-through: a card is a
+    // frame around a dimmed hole, so a robot beneath one is still perfectly
+    // visible, just dimmed like the tiles around it.
     const UI_Z = 98
+    // The BANNER stays BELOW the robot, and this is not an oversight. It is
+    // drawn in opaque boxes - a filled seat badge per player, a black plate
+    // under the gem row - and a speech bubble hangs about 12 px above the
+    // robot's head, so a robot anywhere near the top of the view has its
+    // bubble exactly where those boxes are. Taking the cards up and leaving
+    // the banner down keeps both: the labels are never covered, and a robot
+    // standing on the top row of the board can still say "+1 ?", which is how
+    // a nine year old finds a misspelt card name.
+    const BANNER_Z = 90
 
     // The join overlay: a black card in the middle of a darkened board.
     const LOBBY_BOX_Y = 37
@@ -988,8 +997,9 @@ namespace roboRally {
         const player = bots.length + 1
         const bot = new Bot(sprite, startTile, player)
         bots.push(bot)
-        // Above the cards (z 90) so the robot and its speech bubble are never
-        // hidden behind one, and below the info HUD at z 100.
+        // Above the banner (z 90) so the robot and its speech bubble are never
+        // hidden behind it, below the card strip (z 98) so a card label is
+        // never hidden behind a robot, and below the info HUD at z 100.
         sprite.z = 95
         bot.inf.setLife(startHits)
         bot.inf.setScore(0)
@@ -1455,6 +1465,24 @@ namespace roboRally {
         return tile
     }
 
+    /**
+     * Does rule i reach this square? A machine is wearing its sleeping twin
+     * everywhere except inside its own step, so BOTH drawings have to count -
+     * and they have to count in the same way for every caller. Asking only
+     * about the sleeping one meant a belt a kid CREATED mid-game with
+     * "change every X into Y" was invisible: swapTiles writes the lit
+     * drawing, because the sleeping one is derived and is deliberately not in
+     * the tile picker. stepBusy then said "nobody is on a belt", the board's
+     * turn was skipped, and the skip meant the end-of-step darkening that
+     * would have fixed the tile never ran either.
+     */
+    function ruleReaches(loc: tiles.Location, i: number): boolean {
+        if (tiles.tileAtLocationEquals(loc, betweenTiles[i])) return true
+        const asleep = asleepImage(betweenTiles[i])
+        if (asleep == betweenTiles[i]) return false
+        return tiles.tileAtLocationEquals(loc, asleep)
+    }
+
     /** Is anybody standing where this step's rules would reach them? */
     function stepBusy(step: number): boolean {
         if (!game.currentScene().tileMap) return false
@@ -1463,9 +1491,7 @@ namespace roboRally {
         for (let bot of playing) {
             if (bot.dead || bot.out) continue
             const loc = bot.sprite.tilemapLocation()
-            for (let i of rules) {
-                if (tiles.tileAtLocationEquals(loc, asleepImage(betweenTiles[i]))) return true
-            }
+            for (let i of rules) if (ruleReaches(loc, i)) return true
         }
         return false
     }
@@ -1520,7 +1546,7 @@ namespace roboRally {
             // cost it a camera move and a second of everybody's attention.
             let touched = false
             for (let i of rules) {
-                if (tiles.tileAtLocationEquals(loc, betweenTiles[i])) { touched = true; break }
+                if (ruleReaches(loc, i)) { touched = true; break }
             }
             if (!touched) continue
             // The camera goes to whoever is about to be carried or shot -
@@ -1532,7 +1558,7 @@ namespace roboRally {
             pause(BOARD_FOCUS)
             landBudget = MAX_TILE_CHAIN
             for (let i of rules) {
-                if (tiles.tileAtLocationEquals(loc, betweenTiles[i])) {
+                if (ruleReaches(loc, i)) {
                     current = bot
                     betweenHandlers[i](bot.sprite)
                     checkLanded(bot)
@@ -1632,7 +1658,7 @@ namespace roboRally {
     // ------------------------------------------------------------------
 
     /**
-     * True while this robot's own fifteen seconds are still running. Note this
+     * True while this robot's own twenty seconds are still running. Note this
      * does NOT ask whether the program is full: committing the fourth card
      * ends your turn, but it must not take away your undo. A nine year old
      * mashing A puts a fourth card down by accident constantly, and with no
@@ -1648,6 +1674,43 @@ namespace roboRally {
     /** ...and it still has room for another card. */
     function programming(bot: Bot): boolean {
         return windowOpen(bot) && !bot.ready
+    }
+
+    /**
+     * This robot's own clock has run out. NOT the same question as
+     * windowShut(), which also answers true for somebody who is merely
+     * "ready" - and player 1, sitting on their own screen with time left, is
+     * ready the moment they put their fourth card down and must keep their
+     * undo until the sand actually runs out.
+     */
+    function outOfTime(bot: Bot): boolean {
+        if (!bot || bot.out || !bot.open) return false
+        if (bot.deadline == 0) return false
+        return control.millis() > bot.deadline
+    }
+
+    /**
+     * The shared screen has moved on, so this window is shut for good and the
+     * undo goes with it. There are no takesies-backsies once the next kid is
+     * choosing on the same screen: their hand is what is drawn, so anything
+     * the previous one did to their own program from here would be invisible
+     * to everybody including themselves.
+     *
+     * This is NOT what forceReady does, which is the trap. forceReady only
+     * fills in a program that is still short and returns immediately for a kid
+     * who already put four cards down - so the common case, finishing early,
+     * left the window open and the undo live for the whole of the next kid's
+     * turn.
+     */
+    function closeProgram(bot: Bot) {
+        if (!bot) return
+        bot.open = false
+        // Deliberately NOT bot.deadline = 0. windowShut() reads a deadline of
+        // zero as "the hourglass has not been turned yet" and answers "still
+        // choosing", so clearing it here would hang the phase on anybody who
+        // was closed without being ready. open = false is the whole job;
+        // openProgram and deal both reset the deadline anyway.
+        drawRow(bot, -1, 0)
     }
 
     /**
@@ -1744,7 +1807,7 @@ namespace roboRally {
     /**
      * Turn ONE robot's hourglass. This is what happens when the shared screen
      * is handed to the next kid: the table is waiting on them, so their
-     * fifteen seconds start there and then rather than when they get round to
+     * twenty seconds start there and then rather than when they get round to
      * putting a card down. Never restarts a clock that is already running.
      */
     function startClock(bot: Bot) {
@@ -1900,14 +1963,14 @@ namespace roboRally {
      * down the right.
      *
      * Nobody presses a confirm button - the fourth card ends your turn - and
-     * nobody may hold up the table: fifteen seconds each, then the engine
+     * nobody may hold up the table: twenty seconds each, then the engine
      * fills whatever is missing at random out of the cards left in your hand.
      */
     function programPhase() {
         phase = PHASE_PROGRAM
         // A robot that died last round is whole again the moment the next one
         // is being programmed. Clearing this in runRound instead left its
-        // heart missing from the banner for the entire fifteen seconds.
+        // heart missing from the banner for the entire twenty seconds.
         for (let bot of playing) bot.dead = false
         for (let bot of playing) if (!bot.out) deal(bot)
 
@@ -1944,9 +2007,9 @@ namespace roboRally {
                 }, HOURGLASS + PROGRAM_IDLE)
             } else {
                 // More kids than screens, so the second screen is handed along
-                // one at a time - and the fifteen seconds start the moment it
+                // one at a time - and the twenty seconds start the moment it
                 // reaches you, because the rest of the table is now sitting
-                // watching you think. Each kid gets their own fresh fifteen;
+                // watching you think. Each kid gets their own fresh twenty;
                 // the clock is not inherited from whoever had it before.
                 for (let c of clients) {
                     programOwner = c
@@ -1956,11 +2019,40 @@ namespace roboRally {
                     // began, so their clock starts alongside the FIRST client
                     // and is not restarted for each one after that.
                     startClock(host)
-                    pauseUntil(function () { return windowShut(c) }, HOURGLASS + PROGRAM_IDLE)
+                    // A loop rather than a pauseUntil, because two clocks are
+                    // running at once and only one of them ends this wait.
+                    // Player 1's own sand can run out at any moment during
+                    // somebody else's turn, and it has to be noticed THEN:
+                    // a "TID UDE" that turns up when the phase ends is a
+                    // message about something that happened half a minute ago,
+                    // and until it arrives the cursor sits lit on a card that
+                    // no longer answers to any button.
+                    //
+                    // outOfTime, NOT windowShut: windowShut is also true for
+                    // somebody who is merely ready, and player 1 is ready the
+                    // instant they put their fourth card down. Closing on that
+                    // would take away the undo they are entitled to for the
+                    // rest of their twenty seconds - the same mistake as the
+                    // forceReady(host) this replaced, in a new hat.
+                    //
+                    // The guard is the deadline every blocking wait in this
+                    // engine has to have; windowShut(c) is what normally ends
+                    // it, on this client's own clock.
+                    const guard = control.millis() + HOURGLASS + PROGRAM_IDLE
+                    while (!windowShut(c) && control.millis() < guard) {
+                        pause(60)
+                        if (outOfTime(host)) {
+                            forceReady(host)
+                            closeProgram(host)
+                        }
+                    }
                     forceReady(c)
+                    // The screen is about to go to the next kid, so this one's
+                    // turn is over in every sense - including the undo.
+                    closeProgram(c)
                 }
                 // ...and player 1 is not cut off by a client finishing early
-                // either. Their own fifteen seconds are their own.
+                // either. Their own twenty seconds are their own.
                 pauseUntil(function () { return windowShut(host) }, HOURGLASS + PROGRAM_IDLE)
             }
         } else {
@@ -1976,9 +2068,12 @@ namespace roboRally {
                 openProgram(b)
                 pauseUntil(function () { return windowShut(b) }, HOURGLASS + PROGRAM_IDLE)
                 forceReady(b)
+                // One screen, so the same rule as the shared one: the hand on
+                // display is the next kid's, and the last kid's undo goes.
+                closeProgram(b)
             }
         }
-        for (let b of playing) forceReady(b)
+        for (let b of playing) { forceReady(b); closeProgram(b) }
         programOwner = null
     }
 
@@ -1996,6 +2091,9 @@ namespace roboRally {
     function windowShut(bot: Bot): boolean {
         if (!bot) return true
         if (bot.out || bot.ready) return true
+        // Closed for good by closeProgram, which is what happens when the
+        // shared screen moves on. A shut window is shut whatever the clock says.
+        if (!bot.open) return true
         // An unturned hourglass is not an expired one. Without this the phase
         // ended the instant it began, because millis() > 0 is always true.
         if (bot.deadline == 0) return false
@@ -2349,31 +2447,40 @@ namespace roboRally {
         if (uiMade) return
         uiMade = true
         twoScreens = bots.length > 1
+        // Two layers, because they want to be on opposite sides of the robot:
+        // the banner and the lobby overlay underneath it, the cards on top.
         if (twoScreens) {
-            // Two renderables rather than one, because the two screens do not
-            // show the same cards. Registering them is also what installs the
-            // extension's dual render pass, so a solo game never pays for it.
+            // ...and two of each, because the two screens do not show the same
+            // cards. Registering them is also what installs the extension's
+            // dual render pass, so a solo game never pays for it.
+            secondScreen.renderOnZIndex(BANNER_Z, secondScreen.DrawMode.JustServer,
+                function (target: Image) { drawBack(target, true) })
+            secondScreen.renderOnZIndex(BANNER_Z, secondScreen.DrawMode.JustClients,
+                function (target: Image) { drawBack(target, false) })
             secondScreen.renderOnZIndex(UI_Z, secondScreen.DrawMode.JustServer,
-                function (target: Image) { drawUi(target, true) })
+                function (target: Image) { drawCards(target, true) })
             secondScreen.renderOnZIndex(UI_Z, secondScreen.DrawMode.JustClients,
-                function (target: Image) { drawUi(target, false) })
+                function (target: Image) { drawCards(target, false) })
         } else {
-            // One renderable instead of forty card sprites. It draws last of
-            // anything on the board, so the labels are never covered - and
-            // unlike a sprite it can simply not draw a row, which is how rows
-            // are hidden. (Moving a card off screen is not an option: mapRect
-            // clamps rather than no-ops in the simulator, and would smear a
-            // dimmed line down the edge of the board.)
-            scene.createRenderable(UI_Z, function (target: Image) { drawUi(target, true) })
+            // Renderables instead of forty card sprites: unlike a sprite one
+            // can simply not draw a row, which is how rows are hidden. (Moving
+            // a card off screen is not an option: mapRect clamps rather than
+            // no-ops in the simulator, and would smear a dimmed line down the
+            // edge of the board.)
+            scene.createRenderable(BANNER_Z, function (target: Image) { drawBack(target, true) })
+            scene.createRenderable(UI_Z, function (target: Image) { drawCards(target, true) })
         }
     }
 
-    function drawUi(target: Image, isServer: boolean) {
-        if (phase == PHASE_LOBBY) {
-            drawLobby(target, isServer)
-            drawBanner(target, isServer)
-            return
-        }
+    /** The layer under the robot: the lobby overlay, and the banner. */
+    function drawBack(target: Image, isServer: boolean) {
+        if (phase == PHASE_LOBBY) drawLobby(target, isServer)
+        drawBanner(target, isServer)
+    }
+
+    /** The layer on top of the robot: the cards, and nothing else. */
+    function drawCards(target: Image, isServer: boolean) {
+        if (phase == PHASE_LOBBY) return
         if (phase == PHASE_PROGRAM || phase == PHASE_EXECUTE) {
             // Everybody's committed cards, always, in the same corner every
             // time: 1 and 2 down the left, 3 and 4 down the right.
