@@ -86,11 +86,7 @@ namespace roboRally {
     // ...but a timer nobody ever starts is a frozen table. If not one card has
     // been committed in this long, the phase ends anyway.
     const PROGRAM_IDLE = 45000
-    // If nobody touches anything in the lobby, start anyway.
-    const LOBBY_TIMEOUT = 90000
-    // How long the lobby stays open before it will start a game by itself, so
-    // a setup block that runs late still gets its robots on the roster.
-    const LOBBY_SETTLE = 2000
+    // There is deliberately no lobby timeout and no auto-start. See lobby().
     // How quiet the kid's setup blocks have to be before the round begins.
     const SETUP_QUIET = 400
     // Button events queued during the previous phase are replayed into this
@@ -122,20 +118,28 @@ namespace roboRally {
     // is the width at which printCenter lands on x = 1 exactly; 13 would put
     // ink on the frame. Ten cards (4 program + 6 hand) then fit one row.
     const CARD_W = 14
-    const CARD_H = 7
+    // Nine tall, not seven. At seven the frame sat directly on the five pixel
+    // glyph and the two ran into each other, which on a 160x120 screen is the
+    // difference between reading a card and guessing at it. The row now is:
+    // 0 frame, 1 clear, 2-6 label, 7 clear, 8 frame.
+    const CARD_H = 9
+    const CARD_TEXT_Y = 2
     const PITCH = 15
     const PROGRAM_X = 3
     const HAND_X = 68
-    const ROW_PITCH = 8                 // card plus a one-pixel gap
-    const BOTTOM_ROW_Y = 112            // top edge of player 1's row
+    const ROW_PITCH = 10                // card plus a one-pixel gap
+    const BOTTOM_ROW_Y = 110            // top edge of player 1's row
     const BANNER_H = 8
     const UI_Z = 90
 
-    // A five character readout of what each screen thinks is going on, drawn
-    // just above the card rows. Purely for working out what a live hosted
-    // game is doing, which is the one thing that cannot be tested offline.
-    // Set to false to take it off.
-    const SHOW_DEBUG = true
+    // The join overlay: a black card in the middle of a darkened board.
+    const LOBBY_BOX_Y = 37
+    const LOBBY_BOX_H = 46
+    // Deliberately not Danish: font8 has all six of ae/oe/aa, but these two
+    // lines name the two buttons on the controller, and the buttons say A
+    // and B. Keep them short enough that the doubled font still fits 160 px.
+    const LOBBY_JOIN = "A = Join"
+    const LOBBY_START = "B = Start"
 
     // Arcade images have no alpha channel, so a card cannot be drawn half
     // transparent. What it can do is leave its middle empty and darken the
@@ -326,6 +330,16 @@ namespace roboRally {
     let betweenTiles: Image[] = []
     let betweenHandlers: ((robot: Sprite) => void)[] = []
 
+    // Tiles that turn themselves on and off: two drawings of one thing, which
+    // the board swaps over on its own turn. A laser that fires every other
+    // card is this plus one "between cards" rule on the lit version.
+    let blinkOn: Image[] = []
+    let blinkOff: Image[] = []
+
+    // Built once, not once a frame: the lobby overlay is drawn on every tick
+    // of both screens and image.scaledFont allocates.
+    let bigFont: image.Font = null
+
     // Treasure, and with it the win condition.
     let chestTile: Image = null
     let chestOpenTile: Image = null
@@ -480,6 +494,30 @@ namespace roboRally {
         setupAt = control.millis()
         chestTile = chest
         chestOpenTile = opened
+    }
+
+    /**
+     * Two drawings of the same thing: switched on, and switched off. Every
+     * time the board takes its turn - once after every card - each $on tile on
+     * the map turns into $off, and each $off turns back into $on.
+     *
+     * Give the lit one a rule with "on robot is on ... between cards" and give
+     * the dark one no rule at all, and you have a laser that fires on every
+     * other card and can be walked past in between.
+     * @param on what the tile looks like while it is working
+     * @param off what the very same tile looks like while it is not
+     */
+    //% blockId=roboRally_blinkTiles
+    //% block="$on and $off take turns"
+    //% on.shadow=tileset_tile_picker
+    //% on.decompileIndirectFixedInstances=true
+    //% off.shadow=tileset_tile_picker
+    //% off.decompileIndirectFixedInstances=true
+    //% group="Setup" weight=70
+    export function blinkTiles(on: Image, off: Image) {
+        setupAt = control.millis()
+        blinkOn.push(on)
+        blinkOff.push(off)
     }
 
     // ------------------------------------------------------------------
@@ -666,6 +704,27 @@ namespace roboRally {
     export function onBetweenCards(tile: Image, handler: (robot: Sprite) => void) {
         betweenTiles.push(tile)
         betweenHandlers.push(handler)
+    }
+
+    /**
+     * Turn every $from tile on the whole map into $to, right now. This is how
+     * a switch works: put it inside "on robot lands on", paint the door as one
+     * tile shut and another tile open, and standing on the switch opens every
+     * door at once.
+     * @param from the tile to look for
+     * @param to what to turn it into
+     */
+    //% blockId=roboRally_swapTiles
+    //% block="change every $from tile into $to"
+    //% from.shadow=tileset_tile_picker
+    //% from.decompileIndirectFixedInstances=true
+    //% to.shadow=tileset_tile_picker
+    //% to.decompileIndirectFixedInstances=true
+    //% group="Tiles" weight=60
+    export function swapTiles(from: Image, to: Image) {
+        if (!game.currentScene().tileMap) return
+        const found = tiles.getTilesByType(from)
+        for (let loc of found) tiles.setTileAt(loc, to)
     }
 
     /**
@@ -1252,6 +1311,24 @@ namespace roboRally {
         current = previous
     }
 
+    /**
+     * Flip every blinking pair over, at the END of the board's turn. A laser
+     * that was lit when the register began is the one that burned you; what
+     * the kids are looking at while they watch the next card is what it will
+     * do next time. Both sides are collected before either is written, or the
+     * first swap would feed straight into the second and nothing would change.
+     */
+    function blinkPhase() {
+        if (blinkOn.length == 0) return
+        if (!game.currentScene().tileMap) return
+        for (let i = 0; i < blinkOn.length; i++) {
+            const lit = tiles.getTilesByType(blinkOn[i])
+            const dark = tiles.getTilesByType(blinkOff[i])
+            for (let loc of lit) tiles.setTileAt(loc, blinkOff[i])
+            for (let loc of dark) tiles.setTileAt(loc, blinkOn[i])
+        }
+    }
+
     // ------------------------------------------------------------------
     // Engine internals: the deck
     // ------------------------------------------------------------------
@@ -1494,33 +1571,18 @@ namespace roboRally {
     function lobby() {
         phase = PHASE_LOBBY
         lobbyDone = false
-        const opened = control.millis()
-        const deadline = opened + LOBBY_TIMEOUT
-        while (!lobbyDone && control.millis() < deadline) {
-            // Nothing else in the game ever mentions hosting, and a kid who
-            // just presses Play gets the one-screen fallback - which works, so
-            // they would never find out that the whole point of two robots is
-            // a screen each. Say it here, where they are already waiting.
-            const beat = (control.millis() >> 11) % (twoScreens && !splitScreens() ? 3 : 2)
-            let ask = "TRYK A"
-            if (beat == 1) ask = "P1: B=START"
-            else if (beat == 2) ask = "DEL OG HOST"
-            banner(ask, 1)
-            // The roster is re-read every pass, so robots added by a setup
-            // block that ran late are still picked up.
-            const settled = control.millis() - opened > LOBBY_SETTLE
-            let all = bots.length > 0
-            for (let b of bots) if (!b.joined) all = false
-            if (settled && all) break
-            // One robot has nobody to wait for - but only once the roster has
-            // had time to settle, or a slow setup would start a four player
-            // game as a solo one.
-            if (settled && bots.length == 1) {
-                bots[0].joined = true
-                break
-            }
-            pause(100)
-        }
+        // The banner says nothing here: drawLobby owns this screen, and the
+        // seat badges along the top already show who has pressed A.
+        banner("", 1)
+        // No timeout, and no game that starts itself. Every other wait in this
+        // engine has a deadline, because one nine year old who puts a
+        // controller down must not be able to freeze the table - but nothing
+        // has started yet, the overlay names the button in letters you can
+        // read across a room, and a game that begins while the class is still
+        // working out who is sitting where is worse than one that waits.
+        // Player 1 pressing B is the only way out, and it is refused until at
+        // least one robot has joined.
+        while (!lobbyDone) pause(50)
         if (!anyJoined()) bots[0].joined = true
         defaultDeck()
 
@@ -1604,7 +1666,7 @@ namespace roboRally {
         if (!splitScreens() || clients.length <= 1) {
             // One screen between them, or one screen each: either way there is
             // nothing to take turns over.
-            banner("VAELG KORT", 1)
+            banner("PROGRAM", 1)
             if (host) openProgram(host)
             for (let c of clients) openProgram(c)
             if (clients.length > 0) programOwner = clients[0]
@@ -1692,6 +1754,10 @@ namespace roboRally {
      */
     function runRound() {
         const solo = playing.length <= 1
+        // The rows are cached images and handShown() has just changed its
+        // mind, so every one of them has to be rebuilt before the first
+        // register - otherwise six dead hand cards sit there all round.
+        for (let b of playing) if (b.rowY >= 0 && !b.out) drawRow(b, -1, 0)
         for (let reg = 0; reg < PROGRAM_SIZE; reg++) {
             for (let bot of playing) {
                 if (!inPlay(bot) || bot.dead) continue
@@ -1741,10 +1807,11 @@ namespace roboRally {
             // starting project there is not one between-cards rule, and a
             // silent BANEN pause on every register is a second of nothing,
             // four times a round, in the version aimed at beginners.
-            if (betweenTiles.length > 0) {
+            if (betweenTiles.length > 0 || blinkOn.length > 0) {
                 banner("BANEN", 1)
                 pause(BOARD_PAUSE)
                 boardPhase()
+                blinkPhase()
                 pause(BOARD_PAUSE)
                 banner("", 1)
             }
@@ -1756,7 +1823,7 @@ namespace roboRally {
     function waitForTurn(bot: Bot) {
         bot.aPressed = false
         turnDeadline = control.millis() + TURN_TIMEOUT
-        banner("TRYK A", bot.color)
+        banner("P" + bot.player, bot.color)
         pauseUntil(function () {
             return bot.aPressed || control.millis() > turnDeadline || bot.out || bot.dead
         })
@@ -1852,18 +1919,17 @@ namespace roboRally {
      */
     function splitScreens(): boolean {
         if (!twoScreens) return false
-        // Two independent signals, because relying on the first one alone
-        // shipped a broken game: on a real host getOrigin() did NOT answer
-        // "server", every screen fell back to the one-screen layout, and
-        // player 2 was left looking at a board with no hand, no cursor and no
-        // banner. The extension posts the client image whether or not the
-        // origin says anything, so the split has to be decided some other way
-        // too - and "somebody actually joined over the network" is a better
-        // question anyway, because it is the thing we actually care about.
-        if (getOrigin() == "server") return true
-        return controller.player2.connected
-            || controller.player3.connected
-            || controller.player4.connected
+        // ONE signal, and it has to be this one. controller.playerN.connected
+        // looks like a second opinion and is not: ControllerButton.setPressed
+        // sets connected = true on the first press of any button, so in the
+        // editor or on hardware - where there is exactly one screen - it turns
+        // true the moment player 2 joins the lobby, and player 2's hand then
+        // gets hidden with nowhere else to draw it. The two mistakes are not
+        // the same size: answering true when there is one screen LOSES a
+        // player's cards, answering false when there are two only shows player
+        // 1 more than they should see, and the client image is drawn
+        // unconditionally either way. So ask the strong question only.
+        return getOrigin() == "server"
     }
 
     /**
@@ -1994,6 +2060,11 @@ namespace roboRally {
     }
 
     function drawUi(target: Image, isServer: boolean) {
+        if (phase == PHASE_LOBBY) {
+            drawLobby(target)
+            drawBanner(target, isServer)
+            return
+        }
         if (phase == PHASE_PROGRAM) {
             if (!isServer) {
                 // The client image is ONLY ever seen by clients, so it always
@@ -2024,30 +2095,38 @@ namespace roboRally {
             }
         }
         drawBanner(target, isServer)
-        if (SHOW_DEBUG) drawDebug(target, isServer)
     }
 
     /**
-     * Five characters: which screen this is, whether the engine is splitting
-     * them, who owns the client screen, what the runtime says our multiplayer
-     * role is, and whether anybody has joined over the network. Everything the
-     * offline tests cannot tell us, on the one screen that can.
+     * The lobby is the one screen every kid has to read before anything can
+     * happen, and five pixel text in a corner is not something four nine year
+     * olds notice across a table. Darken the whole board and put the two
+     * buttons in the middle, four times the size.
+     *
+     * Arcade images have no alpha channel, so "darken" is mapRect through DIM
+     * - the same trick that lets a card be see-through.
      */
-    function drawDebug(target: Image, isServer: boolean) {
-        let top = BOTTOM_ROW_Y
-        for (let b of playing) if (b.rowY >= 0 && b.rowY < top) top = b.rowY
-        const y = top - 7
-        if (y < BANNER_H) return
-        const origin = getOrigin()
-        const joined = controller.player2.connected
-            || controller.player3.connected || controller.player4.connected
-        const text = (isServer ? "S" : "C")
-            + (splitScreens() ? "+" : "-")
-            + (programOwner ? "" + programOwner.player : "-")
-            + (origin == "server" ? "s" : (origin == "client" ? "c" : "?"))
-            + (joined ? "n" : "-")
-        plateAt(target, 1, y - 1, text.length)
-        target.print(text, 2, y, 5, image.font5)
+    function drawLobby(target: Image) {
+        target.mapRect(0, 0, target.width, target.height, DIM)
+        if (!bigFont) bigFont = image.scaledFont(image.font8, 2)
+        const jw = LOBBY_JOIN.length * bigFont.charWidth
+        const sw = LOBBY_START.length * image.font8.charWidth
+        const w = (jw > sw ? jw : sw) + 16
+        const x = (target.width - w) >> 1
+        target.fillRect(x, LOBBY_BOX_Y, w, LOBBY_BOX_H, 15)
+        target.drawRect(x, LOBBY_BOX_Y, w, LOBBY_BOX_H, 1)
+        target.print(LOBBY_JOIN, (target.width - jw) >> 1, LOBBY_BOX_Y + 8, 1, bigFont)
+        target.print(LOBBY_START, (target.width - sw) >> 1, LOBBY_BOX_Y + 30, 5, image.font8)
+    }
+
+    /**
+     * Your hand is your own business only while you are choosing from it. Once
+     * the round is running, the four cards you committed are the whole story -
+     * and six cards nobody can play any more are six more things competing for
+     * a 160x120 screen.
+     */
+    function handShown(): boolean {
+        return phase != PHASE_EXECUTE
     }
 
     function paintRow(target: Image, b: Bot, y: number) {
@@ -2056,8 +2135,10 @@ namespace roboRally {
         for (let i = 0; i < b.program.length; i++) {
             target.mapRect(PROGRAM_X + i * PITCH, y, CARD_W, CARD_H, DIM)
         }
-        for (let i = 0; i < b.hand.length; i++) {
-            target.mapRect(HAND_X + i * PITCH, y, CARD_W, CARD_H, DIM)
+        if (handShown()) {
+            for (let i = 0; i < b.hand.length; i++) {
+                target.mapRect(HAND_X + i * PITCH, y, CARD_W, CARD_H, DIM)
+            }
         }
         target.drawTransparentImage(b.rowImage, 0, y)
     }
@@ -2140,18 +2221,19 @@ namespace roboRally {
             }
             if (!any) return new BannerLine("KLAR", 1)
             // No sand running yet: say what to do, not how long is left.
-            if (latest == 0) return new BannerLine("VAELG KORT", 1)
-            return new BannerLine("VAELG " + secondsLeft(latest), 1)
+            if (latest == 0) return new BannerLine("PROGRAM", 1)
+            return new BannerLine("PROGRAM " + secondsLeft(latest), 1)
         }
         const owner = isServer ? screenOwner(true) : programOwner
         if (owner && programming(owner)) {
-            if (owner.deadline == 0) return new BannerLine("VAELG KORT", owner.color)
-            return new BannerLine("VAELG " + secondsLeft(owner.deadline), owner.color)
+            if (owner.deadline == 0) return new BannerLine("PROGRAM", owner.color)
+            return new BannerLine("PROGRAM " + secondsLeft(owner.deadline), owner.color)
         }
-        // Not your turn: say whose it is, so the kids sharing the second
-        // screen know who they are waiting for.
+        // Not your turn: name whose it is in their own colour, the same way
+        // the execute phase does, so the kids sharing the second screen know
+        // who they are waiting for.
         if (programOwner && programming(programOwner)) {
-            return new BannerLine("P" + programOwner.player + " VAELGER", programOwner.color)
+            return new BannerLine("P" + programOwner.player, programOwner.color)
         }
         return new BannerLine("KLAR", 1)
     }
@@ -2174,8 +2256,14 @@ namespace roboRally {
             if (i >= bot.program.length) continue
             let style = 0
             if (i == reg) style = regStyle
+            // EVERY card already played stays grey, not only the one that has
+            // just run. The row is the record of the turn so far, and a single
+            // grey slot among three bright ones reads as "that one is broken"
+            // rather than "we are three cards in".
+            else if (reg >= 0 && i < reg) style = 2
             drawCard(im, PROGRAM_X + i * PITCH, bot.hand[bot.program[i]], style, bot.color)
         }
+        if (!handShown()) return
         for (let i = 0; i < bot.hand.length; i++) {
             let style = 0
             if (bot.program.indexOf(i) >= 0) style = 2
@@ -2195,6 +2283,12 @@ namespace roboRally {
      * darkens what is behind so the label still reads. The card under the
      * cursor is drawn solid, so it is the one thing on the row you cannot miss.
      *
+     * The frame carries the player colour and the label is always WHITE.
+     * Printing the label in the player colour too meant player 2 read their
+     * own hand as dark blue on a dimmed board, which is very nearly the same
+     * thing as not printing it at all. Only a spent card goes grey, label and
+     * frame together, because that one is meant to recede.
+     *
      * font5 advances 6 px per character, so on a 14 px card a two-character
      * label lands at x = 1 exactly and a three-character one is clipped.
      */
@@ -2202,14 +2296,14 @@ namespace roboRally {
         const label = fit(card)
         if (style == 1) {
             im.fillRect(x, 0, CARD_W, CARD_H, color)
-            im.print(label, x + centerX(label), 1, 1, image.font5)
+            im.print(label, x + centerX(label), CARD_TEXT_Y, 1, image.font5)
             return
         }
         // Spent cards go grey, but the cursor still has to be findable when it
         // is sitting on one, or A appears to do nothing for no visible reason.
-        const ink = style >= 2 ? 11 : color
-        im.drawRect(x, 0, CARD_W, CARD_H, style == 3 ? 1 : ink)
-        im.print(label, x + centerX(label), 1, ink, image.font5)
+        const spent = style >= 2
+        im.drawRect(x, 0, CARD_W, CARD_H, style == 3 ? 1 : (spent ? 11 : color))
+        im.print(label, x + centerX(label), CARD_TEXT_Y, spent ? 11 : 1, image.font5)
     }
 
     /**

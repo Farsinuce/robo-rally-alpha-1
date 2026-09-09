@@ -41,6 +41,12 @@ roboRally.addRobots(2)
 // Den der åbner flest kister vinder. Er der flere om førstepladsen
 // bliver det uafgjort.
 roboRally.treasure(assets.tile`chest`, assets.tile`chestOpen`)
+// Laserne tænder og slukker. Banen bytter de to felter hver gang den får sin
+// tur - altså efter hvert kort - så det tændte felt bliver til det slukkede og
+// omvendt. Det tændte har en regel længere nede, det slukkede har ingen, og så
+// skyder laseren hvert andet kort. Tæl med, og gå forbi når den er mørk.
+roboRally.blinkTiles(assets.tile`laserH`, assets.tile`laserHOff`)
+roboRally.blinkTiles(assets.tile`laserV`, assets.tile`laserVOff`)
 
 // ---------------------------------------------------------------
 // Kortene: et blok-hoved for hvert kort i bunken
@@ -106,7 +112,12 @@ roboRally.onBetweenCards(assets.tile`conveyorUp`, function (robot) {
 roboRally.onBetweenCards(assets.tile`conveyorDown`, function (robot) {
     roboRally.push(RoboDirection.Down)
 })
-// Laseren fyrer mellem hvert kort: står du i strålen koster det et hit
-roboRally.onBetweenCards(assets.tile`laser`, function (robot) {
+// Laserne fyrer mellem hvert kort: står du i strålen koster det et hit.
+// Kun de TÆNDTE felter har en regel - de slukkede gør ingenting, og det er
+// hele forskellen på de to tegninger.
+roboRally.onBetweenCards(assets.tile`laserH`, function (robot) {
+    roboRally.takeHits(1)
+})
+roboRally.onBetweenCards(assets.tile`laserV`, function (robot) {
     roboRally.takeHits(1)
 })
