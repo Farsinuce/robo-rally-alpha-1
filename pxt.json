@@ -2,7 +2,8 @@
     "name": "Robo Rally alpha 1",
     "description": "",
     "dependencies": {
-        "device": "*"
+        "device": "*",
+        "arcade-second-screen": "github:riknoll/arcade-second-screen#b1a0fefde50e3caeba2de6f21cb1ef72fbdc7615"
     },
     "files": [
         "main.blocks",

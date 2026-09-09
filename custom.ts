@@ -1,9 +1,3 @@
-namespace SpriteKind {
-    // Kept so projects saved before the card UI became a renderable still
-    // compile. Nothing in the engine creates sprites of this kind any more.
-    export const Card = SpriteKind.create()
-}
-
 /**
  * Which way to shove a robot, for the "push robot" block. Used by board
  * elements (conveyor belts, pushers) that move a robot without turning it.
@@ -34,35 +28,60 @@ enum RoboDirection {
  *    being played". The engine always knows which robot that is, so the same
  *    kid program works unchanged for one robot or four.
  *  - The engine owns only the primitives a kid cannot build out of other
- *    blocks: move, turn, push, shoot, and the moment between two cards.
- *    Everything a kid invents on top of those is a card name plus a hat.
- *  - Never change a blockId. Renaming one silently breaks every saved project.
- *    The visible block text can change freely.
+ *    blocks: move, turn, push, shoot, a random action, and the moment between
+ *    two cards. Everything a kid invents on top of those is a card name plus a
+ *    hat.
+ *  - Every block carries an explicit blockId. There are no saved kid projects
+ *    to protect yet, so a block can still be removed outright - but once the
+ *    club has work saved, renaming an id silently breaks it.
  *
  * The round is a state machine running in its own fiber (see gameLoop). Button
  * handlers only ever set a flag; nothing long-running happens inside one.
  */
 //% color="#B4009E" icon="" block="Robo Rally" weight=100
-//% groups='["Setup", "Cards", "Tiles", "Robot", "Advanced"]'
+//% groups='["Setup", "Cards", "Tiles", "Robot"]'
 namespace roboRally {
+    // The host of an online game is "server", everybody who joined is
+    // "client", and a game merely running in the editor or on a handheld is
+    // neither. Only a hosted game has two screens to split.
+    //% shim=multiplayer::getOrigin
+    declare function getOrigin(): string
+
     const HAND_SIZE = 6
     const PROGRAM_SIZE = 4
     const MAX_PLAYERS = 4
-    const START_LIVES = 3
+    // Two hits and you are down: one heart, then half a heart, then you die
+    // and come straight back. Nobody is ever eliminated.
+    const START_HEALTH = 2
 
-    // Pacing. One card reads as three beats: say it, do it, put it away.
+    // ---- Pacing --------------------------------------------------------
+    // A turn reads as five beats half a second apart: the camera arrives, the
+    // robot says what it is about to do, it does it, the bubble comes down,
+    // the next robot goes. Nine year olds cannot follow anything faster.
+    const FOCUS_PAUSE = 500     // camera lands -> speech bubble appears
+    const READ_PAUSE = 500      // bubble -> action, when nobody has to press A
+    const ACT_PAUSE = 500       // action ends -> bubble comes down
+    const GAP_PAUSE = 500       // bubble down -> next robot
+    const BOARD_PAUSE = 500     // either side of the board's own turn
+    const DEATH_PAUSE = 400
     const STEP_PAUSE = 220      // between two tiles of the same move
-    const BEAT = 220            // between the three parts of a card
     const SHOT_PAUSE = 60       // per tile of a shot
+
     // sayText leaves a stale deadline behind if the duration is ever omitted,
     // so every bubble gets an explicit, deliberately long one and the engine
     // takes it down itself with sayText("").
     const BUBBLE_MS = 60000
-    // Nobody's turn may stall the table forever. A kid who has wandered off
-    // gets their card played for them once this runs out.
-    const TURN_TIMEOUT = 20000
-    // How long "look at my robot" (down, while programming) holds the camera.
-    const PEEK_MS = 2500
+    // A card with no rule is a spelling mistake. Its warning is NOT taken down
+    // by the engine, so it needs a lifetime of its own.
+    const MISSING_MS = 2000
+
+    // Your turn starts the moment the camera reaches you. Three seconds is
+    // long enough to press A and short enough that four kids keep moving.
+    const TURN_TIMEOUT = 3000
+    // How long one player has to pick four cards before the engine picks the
+    // rest for them. Per player: in a three or four player game the client
+    // screen is handed on, and each kid gets their own fifteen seconds.
+    const PROGRAM_TIME = 15000
     // If nobody touches anything in the lobby, start anyway.
     const LOBBY_TIMEOUT = 90000
     // How long the lobby stays open before it will start a game by itself, so
@@ -70,19 +89,24 @@ namespace roboRally {
     const LOBBY_SETTLE = 2000
     // How quiet the kid's setup blocks have to be before the round begins.
     const SETUP_QUIET = 400
-    // A whole table must not be held hostage by one seat that never presses B.
-    const PROGRAM_TIMEOUT = 120000
     // Button events queued during the previous phase are replayed into this
-    // one; this window swallows them, so a turn-taking A press cannot commit
-    // a card the moment programming opens.
+    // one; this window swallows them, so the A press that took your turn
+    // cannot commit a card the instant your programming window opens.
     const PHASE_GRACE = 300
 
     // A tile rule that moves the robot re-triggers the rules on the new tile.
     // The budget is shared by every landing in one cascade, so two belts
     // shoving each other cannot multiply out. It is also spent by ordinary
     // movement (step lands the robot on every tile it crosses), so it has to
-    // be comfortably larger than the longest move card.
-    const MAX_TILE_CHAIN = 16
+    // be comfortably larger than the longest move card - which is now 5.
+    const MAX_TILE_CHAIN = 24
+
+    // The joker. Getting shot or shoved earns you one of these in your next
+    // hand: it does something out of the deck, but you do not get to say what.
+    const JOKER = "?"
+    // Never fill a hand so full of jokers that there is nothing left to choose
+    // between.
+    const MAX_JOKERS = 4
 
     // The four players' colours, matching the ones MakeCode's own multiplayer
     // HUD and join lobby use, so a kid's robot, card row and prompt all agree.
@@ -101,6 +125,7 @@ namespace roboRally {
     const ROW_PITCH = 8                 // card plus a one-pixel gap
     const BOTTOM_ROW_Y = 112            // top edge of player 1's row
     const BANNER_H = 8
+    const UI_Z = 90
 
     // Arcade images have no alpha channel, so a card cannot be drawn half
     // transparent. What it can do is leave its middle empty and darken the
@@ -132,6 +157,27 @@ namespace roboRally {
         . . . . . .
     `
 
+    // Health is one heart, not a row of them: full is two hits left, half is
+    // one, and the next hit after that kills you. Half is drawn as a heart
+    // whose right side is hollow, so the silhouette still reads as a heart
+    // rather than as a smaller one.
+    const HEART = img`
+        . 2 2 . 2 2 .
+        2 2 2 2 2 2 2
+        2 2 2 2 2 2 2
+        . 2 2 2 2 2 .
+        . . 2 2 2 . .
+        . . . 2 . . .
+    `
+    const HALF_HEART = img`
+        . 2 2 . 2 2 .
+        2 2 2 2 . . 2
+        2 2 2 2 . . 2
+        . 2 2 2 . 2 .
+        . . 2 2 2 . .
+        . . . 2 . . .
+    `
+
     /**
      * All per-robot state. Nothing outside this class assumes how many robots
      * there are. Classes are invisible to the Blocks editor, so this costs the
@@ -146,8 +192,8 @@ namespace roboRally {
         facing: number
         images: Image[]
 
-        // Its own stair. Assigned once, so a robot always comes back to the
-        // same corner rather than to whichever start tile happens to be free.
+        // Its own stair, claimed once at the start so every robot begins in a
+        // different corner. Respawning goes to the NEAREST stair instead.
         startTile: Image
         startCol: number
         startRow: number
@@ -157,11 +203,18 @@ namespace roboRally {
         selected: number
         drawPile: string[]
         discard: string[]
+        // Jokers earned since the last deal, and how many of them are in the
+        // hand right now. They are lent by the engine, so they must not end up
+        // in the discard pile and become permanent members of the deck.
+        jokers: number
+        injected: number
 
         joined: boolean             // pressed A in the lobby
-        ready: boolean              // pressed B, program committed
-        dead: boolean               // lost a life this round, sits the rest out
-        out: boolean                // no lives left, out of the game
+        ready: boolean              // four cards down, program committed
+        deadline: number            // when this robot's programming window shuts
+        openedAt: number            // when it opened, for the grace window
+        dead: boolean               // died this round, sits out the rest of it
+        out: boolean                // never joined, so never on the board
         chests: number
 
         aPressed: boolean           // set by the A handler while it is our turn
@@ -187,8 +240,12 @@ namespace roboRally {
             this.selected = 0
             this.drawPile = []
             this.discard = []
+            this.jokers = 0
+            this.injected = 0
             this.joined = false
             this.ready = false
+            this.deadline = 0
+            this.openedAt = 0
             this.dead = false
             this.out = false
             this.chests = 0
@@ -217,11 +274,15 @@ namespace roboRally {
         lookChanged(): boolean {
             return this.sprite.image !== this.images[this.facing]
         }
+    }
 
-        respawn() {
-            this.facing = 0
-            this.sprite.setImage(this.images[0])
-            placeOnStart(this)
+    /** What one screen's banner is saying, and in whose colour. */
+    class BannerLine {
+        text: string
+        color: number
+        constructor(text: string, color: number) {
+            this.text = text
+            this.color = color
         }
     }
 
@@ -230,6 +291,7 @@ namespace roboRally {
     let playing: Bot[] = []      // the robots that actually joined, in player order
     let current: Bot = null
     let activeBot: Bot = null    // whose card is running, during PHASE_EXECUTE
+    let programOwner: Bot = null // who has the client screen, during PHASE_PROGRAM
     let phase = PHASE_SETUP
     let started = false
     let loopStarted = false
@@ -237,9 +299,13 @@ namespace roboRally {
     // Stamped by every setup block, so the round can wait for the kid's
     // "on start" stack to go quiet before it opens the lobby.
     let setupAt = 0
-    // When the current phase began, so a button event queued in the previous
-    // phase does not act on this one.
-    let phaseAt = 0
+    // True when the engine owns two screens rather than one. Settled once, at
+    // the point the roster is final; whether they are actually SPLIT is asked
+    // again every frame, because the same project is built in the editor on
+    // one screen and played online on two.
+    let twoScreens = false
+    // Set when "play with N robots" ran before "start Robo Rally".
+    let wantRobots = 0
 
     let cardNames: string[] = []
     let cardHandlers: ((robot: Sprite) => void)[] = []
@@ -247,10 +313,8 @@ namespace roboRally {
     let landHandlers: ((robot: Sprite) => void)[] = []
     let betweenTiles: Image[] = []
     let betweenHandlers: ((robot: Sprite) => void)[] = []
-    // Kept for the old catch-all block; see onLanded below.
-    let anyLandHandler: () => void = null
 
-    // Treasure, and with it the second win condition.
+    // Treasure, and with it the win condition.
     let chestTile: Image = null
     let chestOpenTile: Image = null
     let chestsLeft = -1
@@ -264,17 +328,17 @@ namespace roboRally {
     let bannerText = ""
     let bannerColor = 1
     // A short-lived message on top of the standing one, so telling a kid
-    // "four cards!" does not leave the banner stuck on it for the rest of the
-    // phase. 
+    // something does not leave the banner stuck on it for the rest of the
+    // phase.
     let flashText = ""
     let flashColor = 1
     let flashUntil = 0
     let turnDeadline = 0
 
-    // Camera. During a turn it sits on the robot playing; while programming it
-    // sits between everybody, unless someone asked to look at their own robot.
-    let peekBot: Bot = null
-    let peekUntil = 0
+    // True while a robot is acting on one of its own cards, so that shoving
+    // another robot out of the way earns that robot a joker. A conveyor belt
+    // does not: the board is not charging anybody.
+    let charging = false
 
     // ------------------------------------------------------------------
     // Setup
@@ -314,6 +378,11 @@ namespace roboRally {
         if (!robot || started) return
         setupAt = control.millis()
         addRobot(robot, startTile)
+        if (wantRobots > 1) {
+            const n = wantRobots
+            wantRobots = 0
+            addRobots(n)
+        }
         started = true
         beginLoop()
     }
@@ -322,15 +391,25 @@ namespace roboRally {
      * Play with more robots. The engine copies the robot you drew once per
      * player and recolours it, so player 1 is red, player 2 blue, player 3
      * orange and player 4 green. Every robot gets its own start tile.
-     * @param count how many robots altogether, eg: 4
+     *
+     * With two or more robots the game is meant to be HOSTED: press Share and
+     * pick "host a multiplayer game". Player 1 then gets a view of their own
+     * and everybody else shares a second one, so nobody can read your cards.
+     * @param count how many robots altogether, eg: 2
      */
     //% blockId=roboRally_addRobots
     //% block="play with $count robots"
-    //% count.defl=4 count.min=1 count.max=4
+    //% count.defl=2 count.min=1 count.max=4
     //% group="Setup" weight=85
     export function addRobots(count: number) {
-        if (bots.length == 0) return
         setupAt = control.millis()
+        if (bots.length == 0) {
+            // Dropped ABOVE "start Robo Rally". Block order is not obvious at
+            // nine, and silently playing a one-robot game is a rotten way to
+            // find out - so remember it and let startGame apply it.
+            wantRobots = count
+            return
+        }
         const first = bots[0]
         const body = bodyColor(first.images[0])
         for (let p = bots.length + 1; p <= Math.min(count, MAX_PLAYERS); p++) {
@@ -339,8 +418,17 @@ namespace roboRally {
             addRobot(s, first.startTile)
         }
         // Player 1 is recoloured too, or the colour language breaks down: the
-        // card row, the prompt and the robot have to agree on who is red.
-        first.setLook(tinted(first.images[0], body, PLAYER_COLOR[0]))
+        // card row, the prompt and the robot have to agree on who is red. Only
+        // when there IS somebody to tell them apart from, though - a solo kid
+        // gets to keep the robot they drew.
+        if (bots.length > 1) {
+            first.setLook(tinted(first.images[0], body, PLAYER_COLOR[0]))
+            // And re-post the lobby avatar, or player 1 keeps the icon posted
+            // before the recolour - which is the ORIGINAL drawing, and if the
+            // kid drew it blue that is player 2's colour. Two identical
+            // avatars, on the one screen where you pick your seat.
+            mp.postPresenceIcon(1, first.sprite.image)
+        }
     }
 
     /**
@@ -362,9 +450,10 @@ namespace roboRally {
     }
 
     /**
-     * Treasure hunt. Every robot that lands on a chest opens it and keeps it.
-     * When the last chest on the board has been opened, whoever opened the most
-     * wins - and if two robots opened the same number, it is a draw.
+     * Treasure hunt. Every robot that lands on a chest opens it, keeps it and
+     * is patched up to full health. When the last chest on the board has been
+     * opened, whoever opened the most wins - and if two robots opened the same
+     * number, it is a draw.
      * @param chest the closed chest tile you painted on the map
      * @param opened what the tile turns into once a robot has opened it
      */
@@ -404,10 +493,11 @@ namespace roboRally {
      * Move the robot forwards. A negative number backs it up without turning.
      * The robot stops if it hits a wall, falls if it walks off the board, and
      * steps one tile at a time so tile rules fire on every tile it crosses.
+     * Anything in the way is shoved along in front of it.
      */
     //% blockId=roboRally_move
     //% block="move $n"
-    //% n.defl=1 n.min=-3 n.max=3
+    //% n.defl=1 n.min=-5 n.max=5
     //% group="Cards" weight=90
     export function move(n: number) {
         const bot = active()
@@ -432,12 +522,15 @@ namespace roboRally {
     /**
      * Shoot straight ahead. The shot travels one tile at a time and stops at
      * the first wall, at the edge of the board, or at another robot. A robot
-     * that is hit loses a life and goes back to its start tile.
+     * that is hit takes damage AND finds a "?" joker in its next hand.
+     * @param hits how much damage the shot does, eg: 1
      */
     //% blockId=roboRally_shoot
-    //% block="shoot"
+    //% block="shoot||for $hits hits"
+    //% hits.defl=1 hits.min=1 hits.max=5
+    //% expandableArgumentMode="toggle"
     //% group="Cards" weight=60
-    export function shoot() {
+    export function shoot(hits = 1) {
         const shooter = active()
         if (!shooter || shooter.dead || shooter.out) return
         const tm = game.currentScene().tileMap
@@ -473,7 +566,12 @@ namespace roboRally {
             if (victim) break
         }
         bullet.destroy()
-        if (victim) kill(victim)
+        if (victim) {
+            // Being shot rattles you: next round one of your six cards is a
+            // joker you did not choose.
+            earnJoker(victim)
+            hit(victim, hits)
+        }
     }
 
     /**
@@ -489,6 +587,35 @@ namespace roboRally {
         const bot = active()
         if (!bot || bot.dead || bot.out) return
         step(bot, dir, MAX_PLAYERS)
+    }
+
+    /**
+     * Do something out of the deck, chosen at random. This is what the "?"
+     * joker card is for: you get one every time somebody shoots you or shoves
+     * you around, and you do not get to say what it does.
+     */
+    //% blockId=roboRally_randomAction
+    //% block="do a random action"
+    //% group="Cards" weight=45
+    export function randomAction() {
+        const bot = active()
+        if (!bot || bot.dead || bot.out) return
+        // A kid can point an ordinary card at this block, and that card could
+        // be the one we pick. Two levels deep is plenty.
+        if (jokerDepth >= 2) return
+        let choices: string[] = []
+        for (let c of deck) {
+            if (c == JOKER) continue
+            if (choices.indexOf(c) < 0) choices.push(c)
+        }
+        if (choices.length == 0) return
+        const card = choices[randint(0, choices.length - 1)]
+        // Say what the joker turned into, or the robot looks like it moved on
+        // its own for no reason.
+        bot.sprite.sayText(card + "!", BUBBLE_MS)
+        jokerDepth++
+        playCard(card, bot)
+        jokerDepth--
     }
 
     // ------------------------------------------------------------------
@@ -530,29 +657,27 @@ namespace roboRally {
     }
 
     /**
-     * Lose a life, respawn on the start tile and skip the rest of the program.
+     * Take damage. Two hits kill a robot: it drops the rest of its program for
+     * this round and comes back on the nearest stair with full health.
+     * @param n how many hits, eg: 1
      */
-    //% blockId=roboRally_die
-    //% block="robot dies"
+    //% blockId=roboRally_takeHits
+    //% block="robot takes $n hits"
+    //% n.defl=1 n.min=1 n.max=5
     //% group="Tiles" weight=90
-    export function die() {
-        kill(active())
+    export function takeHits(n: number) {
+        hit(active(), n)
     }
 
     /**
-     * Give the robot lives, or take them away. A negative number costs lives
-     * without sending the robot back to its start tile.
-     * @param n how many lives to add
+     * Die outright, whatever health was left. The robot drops the rest of its
+     * program for this round and comes back on the nearest stair.
      */
-    //% blockId=roboRally_changeLives
-    //% block="change robot lives by $n"
-    //% n.defl=1 n.min=-3 n.max=3
+    //% blockId=roboRally_die
+    //% block="robot dies"
     //% group="Tiles" weight=85
-    export function changeLives(n: number) {
-        const bot = active()
-        if (!bot || bot.out) return
-        bot.inf.changeLifeBy(n)
-        if (bot.inf.life() <= 0) retire(bot)
+    export function die() {
+        kill(active())
     }
 
     /**
@@ -575,18 +700,6 @@ namespace roboRally {
     // ------------------------------------------------------------------
 
     /**
-     * The robot sprite, so you can use it in ordinary sprite blocks:
-     * say something, start an effect, place it on a random tile.
-     */
-    //% blockId=roboRally_theRobot
-    //% block="the robot"
-    //% group="Robot" weight=100
-    export function theRobot(): Sprite {
-        const bot = active()
-        return bot ? bot.sprite : null
-    }
-
-    /**
      * Which way the robot is facing: 0 up, 1 right, 2 down, 3 left.
      */
     //% blockId=roboRally_facing
@@ -595,6 +708,18 @@ namespace roboRally {
     export function facing(): number {
         const bot = active()
         return bot ? bot.facing : 0
+    }
+
+    /**
+     * How much health the robot has left. Two is a full heart, one is half a
+     * heart, and the next hit after that kills it.
+     */
+    //% blockId=roboRally_health
+    //% block="robot health"
+    //% group="Robot" weight=85
+    export function health(): number {
+        const bot = active()
+        return bot ? bot.inf.life() : 0
     }
 
     /**
@@ -610,84 +735,19 @@ namespace roboRally {
         if (bot && up) bot.setLook(up)
     }
 
-    // ------------------------------------------------------------------
-    // Old blocks. Hidden from the toolbox, still compile, so projects made
-    // before this version keep opening. Remove after the RFID session.
-    // ------------------------------------------------------------------
-
     /**
-     * Build a map from text. Superseded by the tilemap editor: use the native
-     * "set tilemap to" block instead.
+     * True when the robot is standing on this tile right now. Use it inside a
+     * card to make the card do something different depending on where you are.
      */
-    //% blockId=roboRally_mapFromText
-    //% block="build map from $rows"
-    //% rows.shadow="lists_create_with" rows.defl="text"
-    //% deprecated=true
-    //% group="Advanced" weight=10
-    export function mapFromText(rows: string[]) {
-        const w = rows[0].length
-        const h = rows.length
-        const data = control.createBuffer(4 + w * h)
-        data.setNumber(NumberFormat.UInt16LE, 0, w)
-        data.setNumber(NumberFormat.UInt16LE, 2, h)
-        // Gallery tiles on purpose. A kid can delete a project tile in the
-        // asset editor, and a dangling myTiles.* reference in here would fail
-        // the whole compile and take the Blocks view down with it.
-        tiles.setCurrentTilemap(tiles.createTilemap(data, image.create(w, h), [
-            sprites.dungeon.floorLight0, sprites.dungeon.floorDark0, sprites.dungeon.hazardLava0,
-            sprites.dungeon.chestClosed, sprites.dungeon.stairLarge], TileScale.Sixteen))
-        for (let row = 0; row < h; row++) {
-            for (let col = 0; col < w; col++) {
-                const ch = rows[row].charAt(col)
-                const loc = tiles.getTileLocation(col, row)
-                let tile = sprites.dungeon.floorLight0
-                if (ch == "#") tile = sprites.dungeon.floorDark0
-                if (ch == "L") tile = sprites.dungeon.hazardLava0
-                if (ch == "G") tile = sprites.dungeon.chestClosed
-                if (ch == "S") tile = sprites.dungeon.stairLarge
-                tiles.setTileAt(loc, tile)
-                if (ch == "#") tiles.setWallAt(loc, true)
-            }
-        }
-    }
-
-    /** Superseded by "on robot lands on [tile]". */
-    //% blockId=roboRally_onLanded
-    //% block="on robot landed on a tile"
-    //% deprecated=true
-    //% group="Advanced" weight=9
-    export function onLanded(handler: () => void) {
-        anyLandHandler = handler
-    }
-
-    /** Superseded by the tile hat; still useful inside a card. */
     //% blockId=roboRally_robotIsOn
     //% block="robot is on $tile"
     //% tile.shadow=tileset_tile_picker
     //% tile.decompileIndirectFixedInstances=true
-    //% group="Advanced" weight=8
+    //% group="Robot" weight=70
     export function robotIsOn(tile: Image): boolean {
         const bot = active()
         if (!bot) return false
         return tiles.tileAtLocationEquals(bot.sprite.tilemapLocation(), tile)
-    }
-
-    /** Superseded by the native "say" block on the robot. */
-    //% blockId=roboRally_say
-    //% block="robot says $text"
-    //% deprecated=true
-    //% group="Advanced" weight=7
-    export function say(text: string) {
-        const bot = active()
-        if (bot) bot.sprite.sayText(text, 700)
-    }
-
-    /** The camera follows the robot whose turn it is on its own now. */
-    //% blockId=roboRally_cameraFollowsRobot
-    //% block="camera follows robot"
-    //% deprecated=true
-    //% group="Advanced" weight=6
-    export function cameraFollowsRobot() {
     }
 
     // ------------------------------------------------------------------
@@ -746,10 +806,10 @@ namespace roboRally {
         // Above the cards (z 90) so the robot and its speech bubble are never
         // hidden behind one, and below the info HUD at z 100.
         sprite.z = 95
-        bot.inf.setLife(START_LIVES)
+        bot.inf.setLife(START_HEALTH)
         bot.inf.setScore(0)
         // The four corner banners land exactly where the card rows go, and the
-        // HUD draws above them. The engine shows lives in its own banner
+        // HUD draws above them. The engine shows health in its own banner
         // instead; the PlayerInfo is still the store of truth, so the game
         // over screen can rank everybody.
         bot.inf.showLife = false
@@ -761,19 +821,18 @@ namespace roboRally {
         // banner - so turn the global flags off as well.
         info.showLife(false)
         info.showScore(false)
-        // Touching a second player's info flips MakeCode's HUD to multiplayer
-        // mode for good, and from then on nobody - not even player 1 - gets an
-        // automatic game over at zero lives. This handler runs inside the HUD
-        // render pass, so it must never block: raise a flag and let the round
-        // loop end the game.
-        bot.inf.onLifeZero(function () { bot.out = true })
+        // There is deliberately no onLifeZero handler any more. Robots respawn
+        // for ever, so nobody is ever eliminated, and hit() makes sure the
+        // PlayerInfo never actually reaches zero - which is what would
+        // otherwise hand a one-robot game an automatic game over, from inside
+        // the HUD render pass, on its first trip into the lava.
         // The join lobby shows each kid which robot is theirs.
         mp.postPresenceIcon(player, sprite.image)
         sprite.setFlag(SpriteFlag.Invisible, true)
         setupControls(bot)
     }
 
-    /** Take an eliminated robot off the board. */
+    /** Take a robot that never joined off the board. */
     function retire(bot: Bot) {
         if (bot.retired) return
         bot.retired = true
@@ -789,9 +848,9 @@ namespace roboRally {
 
     /**
      * The robot standing on this tile, or null. No engine API does this.
-     * A robot that lost a life this round has already respawned and is
-     * physically on the board, so it counts as occupying its tile; one that is
-     * out of the game has left the board and does not.
+     * A robot that died this round has already respawned and is physically on
+     * the board, so it counts as occupying its tile; one that never joined has
+     * no body at all and does not.
      */
     function botAt(col: number, row: number, except: Bot): Bot {
         for (let b of playing) {
@@ -820,16 +879,17 @@ namespace roboRally {
      *
      * Robots shove each other the way they do in the board game, and a shove
      * carries down a line of robots. `depth` bounds that line, so a ring of
-     * robots cannot recurse forever.
+     * robots cannot recurse forever. Every tile a robot is shoved by ANOTHER
+     * robot's card earns it a joker in its next hand.
      *
      * This is also mutually recursive with fireLanded(): landing runs the
      * tile's rules, and a rule may push the robot, which lands it again. That
      * loop is bounded by the shared landBudget, not by this depth.
      */
     function step(bot: Bot, dir: number, depth: number): boolean {
-        // Only `out` stops a robot being moved. A robot that lost a life this
-        // round has already respawned and is standing on the board, so it can
-        // still be shoved; it just does not get to play any more cards.
+        // Only `out` stops a robot being moved. A robot that died this round
+        // has already respawned and is standing on the board, so it can still
+        // be shoved; it just does not get to play any more cards.
         if (bot.out) return false
         // A kid who forgot "set tilemap to" would otherwise crash on the very
         // first move card.
@@ -842,7 +902,7 @@ namespace roboRally {
         if (offMap(col, row)) {
             tiles.placeOnTile(bot.sprite, tiles.getTileLocation(col, row))
             music.jumpDown.play()
-            pause(BEAT)
+            pause(STEP_PAUSE)
             kill(bot)
             return false
         }
@@ -865,6 +925,9 @@ namespace roboRally {
                 music.knock.play()
                 return false
             }
+            // Being barged one tile down the board earns one joker. The board
+            // itself is not charging anybody, so a conveyor belt does not.
+            if (charging) earnJoker(blocker)
         }
         tiles.placeOnTile(bot.sprite, next)
         fireLanded(bot)
@@ -873,72 +936,91 @@ namespace roboRally {
         return true
     }
 
+    function earnJoker(bot: Bot) {
+        if (!bot || bot.out) return
+        if (bot.jokers < MAX_JOKERS) bot.jokers++
+    }
+
+    /**
+     * The first placement of the game: one stair each, claimed and kept, so
+     * every robot starts in a different corner.
+     */
     function placeOnStart(bot: Bot) {
         if (!game.currentScene().tileMap) {
             bot.sprite.sayText("Hvor er banen?", 1500)
-            return
-        }
-        if (bot.startCol >= 0) {
-            // Somebody may be standing on my stair. Two robots on one tile
-            // break botAt(), which returns only the first of them - the other
-            // becomes unshootable and unpushable.
-            let col = bot.startCol
-            let row = bot.startRow
-            if (botAt(col, row, bot)) {
-                const free = freeTileNear(bot, col, row)
-                col = free.column
-                row = free.row
-            }
-            tiles.placeOnTile(bot.sprite, tiles.getTileLocation(col, row))
-            bot.landedCol = col
-            bot.landedRow = row
-            aimInward(bot)
             return
         }
         if (!bot.startTile) return
         const spots = tiles.getTilesByType(bot.startTile)
         if (spots.length == 0) {
             bot.sprite.sayText("Hvor er startfeltet?", 1500)
+            return
+        }
+        // Falls back to sharing if the kid painted fewer start tiles than
+        // there are players.
+        let chosen = spots[0]
+        for (let loc of spots) {
+            if (!claimedStart(loc.column, loc.row)) { chosen = loc; break }
+        }
+        bot.startCol = chosen.column
+        bot.startRow = chosen.row
+        settle(bot, chosen.column, chosen.row)
+    }
+
+    /**
+     * Respawning goes to the NEAREST stair, not the one you started on: dying
+     * in the far corner and walking all the way back is nobody's idea of a
+     * turn. A stair somebody is already standing on is skipped, because two
+     * robots on one tile break botAt() - it returns only the first of them and
+     * the other becomes unshootable and unpushable.
+     */
+    function respawnNearest(bot: Bot) {
+        bot.facing = 0
+        if (!game.currentScene().tileMap || !bot.startTile) return
+        const spots = tiles.getTilesByType(bot.startTile)
+        if (spots.length == 0) {
             // It may have just fallen off the edge. Anywhere on the board
             // beats leaving it stranded outside, invisible, forever.
             const here = bot.sprite.tilemapLocation()
             if (offMap(here.column, here.row)) {
                 const tm = game.currentScene().tileMap
-                const mid = tiles.getTileLocation(tm.data.width >> 1, tm.data.height >> 1)
-                tiles.placeOnTile(bot.sprite, mid)
-                bot.landedCol = mid.column
-                bot.landedRow = mid.row
+                settle(bot, tm.data.width >> 1, tm.data.height >> 1)
             }
             return
         }
-        // One stair each, claimed once and kept, so a robot always comes back
-        // to the same corner. Falls back to sharing if the kid painted fewer
-        // start tiles than there are players.
-        let chosen = spots[0]
+        const here = bot.sprite.tilemapLocation()
+        let best: tiles.Location = null
+        let bestD = 99999
+        let anywhere: tiles.Location = null
+        let anywhereD = 99999
         for (let loc of spots) {
-            if (!claimedStart(loc.column, loc.row)) { chosen = loc; break }
+            const d = Math.abs(loc.column - here.column) + Math.abs(loc.row - here.row)
+            if (d < anywhereD) { anywhereD = d; anywhere = loc }
+            if (botAt(loc.column, loc.row, bot)) continue
+            if (d < bestD) { bestD = d; best = loc }
         }
-        if (botAt(chosen.column, chosen.row, bot)) {
-            const free = freeTileNear(bot, chosen.column, chosen.row)
-            bot.startCol = free.column
-            bot.startRow = free.row
-            tiles.placeOnTile(bot.sprite, tiles.getTileLocation(free.column, free.row))
-            bot.landedCol = free.column
-            bot.landedRow = free.row
-            aimInward(bot)
-            return
+        const chosen = best ? best : anywhere
+        settle(bot, chosen.column, chosen.row)
+    }
+
+    /** Put a robot down on a tile, stepping aside if it is taken. */
+    function settle(bot: Bot, col: number, row: number) {
+        let c = col
+        let r = row
+        if (botAt(c, r, bot)) {
+            const free = freeTileNear(bot, c, r)
+            c = free.column
+            r = free.row
         }
-        bot.startCol = chosen.column
-        bot.startRow = chosen.row
-        tiles.placeOnTile(bot.sprite, chosen)
-        bot.landedCol = chosen.column
-        bot.landedRow = chosen.row
+        tiles.placeOnTile(bot.sprite, tiles.getTileLocation(c, r))
+        bot.landedCol = c
+        bot.landedRow = r
         aimInward(bot)
     }
 
     /**
      * The nearest tile to (col,row) nobody is standing on and that is on the
-     * board. Used only when a robot has to respawn onto an occupied stair.
+     * board. Used only when a robot has to come down onto an occupied stair.
      */
     function freeTileNear(bot: Bot, col: number, row: number): tiles.Location {
         for (let r = 1; r <= 3; r++) {
@@ -966,7 +1048,10 @@ namespace roboRally {
      */
     function aimInward(bot: Bot) {
         const tm = game.currentScene().tileMap
-        if (!tm || !tm.enabled) return
+        if (!tm || !tm.enabled) {
+            bot.sprite.setImage(bot.images[bot.facing])
+            return
+        }
         const loc = bot.sprite.tilemapLocation()
         const dc = (tm.data.width / 2) - loc.column
         const dr = (tm.data.height / 2) - loc.row
@@ -993,16 +1078,39 @@ namespace roboRally {
         bot.sprite.setImage(bot.images[bot.facing])
     }
 
-    /** The one place a robot loses a life, so lava, holes and bullets agree. */
+    /**
+     * The one place a robot takes damage, so lava, lasers and bullets agree.
+     * The PlayerInfo is never allowed to actually reach zero: MakeCode reads
+     * that as "this player is finished" and, in a one-robot project, ends the
+     * game outright from inside the HUD render pass.
+     */
+    function hit(bot: Bot, n: number) {
+        if (!bot || bot.dead || bot.out || n <= 0) return
+        const left = bot.inf.life() - n
+        if (left > 0) {
+            bot.inf.setLife(left)
+            music.zapped.play()
+            shakeCameras(2, 200)
+            return
+        }
+        kill(bot)
+    }
+
+    /**
+     * Death. You drop whatever is left of this round's program, and come back
+     * on the nearest stair with a full heart, ready to program again when the
+     * next round starts. There is no elimination and no life count to run out.
+     */
     function kill(bot: Bot) {
         if (!bot || bot.dead || bot.out) return
         bot.dead = true
+        bot.sprite.sayText("")
         music.zapped.play()
-        scene.cameraShake(4, 300)
-        pause(400)
-        bot.inf.changeLifeBy(-1)
-        if (bot.inf.life() <= 0) retire(bot)
-        else bot.respawn()
+        shakeCameras(4, 300)
+        pause(DEATH_PAUSE)
+        // Straight from whatever was left to full, so info never sees zero.
+        bot.inf.setLife(START_HEALTH)
+        respawnNearest(bot)
     }
 
     // ------------------------------------------------------------------
@@ -1025,6 +1133,7 @@ namespace roboRally {
     // rule moved the robot through step() (which lands it itself) or with a
     // native block (which does not).
     let landings = 0
+    let jokerDepth = 0
     function fireLanded(bot: Bot) {
         landings++
         const previous = current
@@ -1048,7 +1157,6 @@ namespace roboRally {
                 }
                 if (bot.dead || bot.out) { bot.landing--; current = previous; return }
             }
-            if (anyLandHandler) anyLandHandler()
             if (bot.dead || bot.out) break
             // The engine's own rule, last, so a kid's "on lands on chest" hat
             // still sees the chest that is about to be opened.
@@ -1087,6 +1195,8 @@ namespace roboRally {
         tiles.setTileAt(loc, chestOpenTile)
         bot.chests++
         bot.inf.setScore(bot.chests)
+        // What is in the chest is a repair kit as well as a point.
+        bot.inf.setLife(START_HEALTH)
         if (chestsLeft > 0) chestsLeft--
         music.baDing.play()
         bot.sprite.sayText("KISTE!", 900)
@@ -1135,12 +1245,6 @@ namespace roboRally {
     // ------------------------------------------------------------------
 
     /**
-     * Every robot has its own pile of the same cards. Cards you played and
-     * cards you never played both go on your discard, and when your pile runs
-     * out the discard is shuffled back in - so over a game you see your whole
-     * deck, and no two robots are drawing from the same pile.
-     */
-    /**
      * A deck for a kid who never wrote one. Called at the end of the lobby, not
      * from startGame: an "add cards" block placed BELOW "start Robo Rally" is a
      * perfectly ordinary thing for a nine year old to do, and injecting the
@@ -1152,13 +1256,31 @@ namespace roboRally {
         addCards(1, "-1"); addCards(2, "V"); addCards(2, "H"); addCards(1, "P")
     }
 
+    /**
+     * Every robot has its own pile of the same cards. Cards you played and
+     * cards you never played both go on your discard, and when your pile runs
+     * out the discard is shuffled back in - so over a game you see your whole
+     * deck, and no two robots are drawing from the same pile.
+     *
+     * Jokers earned by being shot or shoved REPLACE cards you would have drawn
+     * rather than being added to the hand: six cards always fit the row, and
+     * being knocked about should cost you choices, not hand you extra ones.
+     */
     function deal(bot: Bot) {
         if (bot.drawPile.length == 0 && bot.discard.length == 0 && bot.hand.length == 0) {
             for (let c of deck) bot.drawPile.push(c)
         }
-        for (let c of bot.hand) bot.discard.push(c)
+        // The jokers on the end of the last hand were lent by the engine, not
+        // drawn from the pile, so they must not join the discard and become
+        // permanent members of the deck.
+        const owned = bot.hand.length - bot.injected
+        for (let i = 0; i < owned; i++) bot.discard.push(bot.hand[i])
         bot.hand = []
-        for (let i = 0; i < HAND_SIZE; i++) {
+        bot.injected = 0
+
+        const jokers = Math.min(bot.jokers, MAX_JOKERS)
+        bot.jokers = 0
+        for (let i = 0; i < HAND_SIZE - jokers; i++) {
             if (bot.drawPile.length == 0) {
                 while (bot.discard.length > 0) {
                     bot.drawPile.push(bot.discard.removeAt(randint(0, bot.discard.length - 1)))
@@ -1167,13 +1289,18 @@ namespace roboRally {
             if (bot.drawPile.length == 0) break
             bot.hand.push(bot.drawPile.removeAt(randint(0, bot.drawPile.length - 1)))
         }
+        // On the end of the row, always, so a kid can see at a glance how much
+        // of their hand somebody else chose for them.
+        for (let i = 0; i < jokers; i++) { bot.hand.push(JOKER); bot.injected++ }
+
         bot.program = []
         bot.selected = 0
         bot.ready = false
+        bot.deadline = 0
         drawRow(bot, -1, 0)
     }
 
-    /** How many cards this robot has to commit before it can press B. */
+    /** How many cards this robot has to commit before its program is full. */
     function programSize(bot: Bot): number {
         return Math.min(PROGRAM_SIZE, bot.hand.length)
     }
@@ -1182,17 +1309,45 @@ namespace roboRally {
     // Engine internals: controls
     // ------------------------------------------------------------------
 
+    /**
+     * True while this robot's own fifteen seconds are still running. Note this
+     * does NOT ask whether the program is full: committing the fourth card
+     * ends your turn, but it must not take away your undo. A nine year old
+     * mashing A puts a fourth card down by accident constantly, and with no
+     * confirm button left there would otherwise be no way back at all.
+     */
+    function windowOpen(bot: Bot): boolean {
+        return phase == PHASE_PROGRAM && !bot.out
+            && bot.deadline > 0 && control.millis() < bot.deadline
+    }
+
+    /** ...and it still has room for another card. */
+    function programming(bot: Bot): boolean {
+        return windowOpen(bot) && !bot.ready
+    }
+
+    /**
+     * Take the last card back out of the program. The cursor goes with it, so
+     * the kid can see which card they got back instead of hunting for it.
+     */
+    function undo(bot: Bot) {
+        if (!windowOpen(bot) || bot.program.length == 0) return
+        bot.selected = bot.program.pop()
+        bot.ready = false
+        drawRow(bot, -1, 0)
+    }
+
     function setupControls(bot: Bot) {
         // addEventListener, not onEvent: onEvent is last-one-wins per button,
         // so a kid who drops a native "on A button pressed" block into their
         // program would silently replace the engine's card handler.
         bot.ctrl.right.addEventListener(ControllerButtonEvent.Pressed, function () {
-            if (phase != PHASE_PROGRAM || bot.ready || bot.hand.length == 0) return
+            if (!programming(bot) || bot.hand.length == 0) return
             bot.selected = (bot.selected + 1) % bot.hand.length
             drawRow(bot, -1, 0)
         })
         bot.ctrl.left.addEventListener(ControllerButtonEvent.Pressed, function () {
-            if (phase != PHASE_PROGRAM || bot.ready || bot.hand.length == 0) return
+            if (!programming(bot) || bot.hand.length == 0) return
             bot.selected = (bot.selected + bot.hand.length - 1) % bot.hand.length
             drawRow(bot, -1, 0)
         })
@@ -1210,57 +1365,53 @@ namespace roboRally {
                 if (bot === activeBot) bot.aPressed = true
                 return
             }
-            if (phase != PHASE_PROGRAM || bot.ready) return
-            if (control.millis() - phaseAt < PHASE_GRACE) return
+            if (!programming(bot)) return
+            // The A press that took your turn must not commit a card the
+            // instant your programming window opens.
+            if (control.millis() - bot.openedAt < PHASE_GRACE) return
             if (bot.program.length >= programSize(bot)) return
             if (bot.program.indexOf(bot.selected) >= 0) return
             bot.program.push(bot.selected)
+            // The fourth card ends your turn. There is no confirm button: at
+            // this age "press B when you are done" is one more thing to forget,
+            // and it made every round wait for the slowest kid to remember.
+            if (bot.program.length >= programSize(bot)) {
+                // Ready, but the window stays open: windowShut() already reads
+                // `ready`, so the round moves on regardless, and leaving the
+                // deadline alone is what keeps undo alive until time runs out.
+                bot.ready = true
+                music.baDing.play()
+            } else {
+                nextFreeCard(bot)
+            }
             drawRow(bot, -1, 0)
         })
         bot.ctrl.up.addEventListener(ControllerButtonEvent.Pressed, function () {
-            if (phase != PHASE_PROGRAM || bot.ready || bot.program.length == 0) return
-            bot.program.pop()
-            drawRow(bot, -1, 0)
-        })
-        bot.ctrl.down.addEventListener(ControllerButtonEvent.Pressed, function () {
-            // The one thing four kids on one screen really need: pull the
-            // camera onto my own robot for a moment while I plan.
-            if (phase != PHASE_PROGRAM || !inPlay(bot)) return
-            peekBot = bot
-            peekUntil = control.millis() + PEEK_MS
+            undo(bot)
         })
         bot.ctrl.B.addEventListener(ControllerButtonEvent.Pressed, function () {
             if (phase == PHASE_LOBBY) {
                 if (bot.player == 1 && anyJoined()) lobbyDone = true
                 return
             }
-            if (phase != PHASE_PROGRAM || bot.ready) return
-            if (bot.program.length < programSize(bot)) {
-                // The robot may be nowhere near the camera, so say it where
-                // everyone is already looking as well as over its head.
-                flash(programSize(bot) + " KORT!", bot.color)
-                bot.sprite.sayText(programSize(bot) + " kort!", 800)
-                music.knock.play()
-                return
-            }
-            bot.ready = true
-            drawRow(bot, -1, 0)
+            // Same as up: take the last card back. B is the button a kid
+            // reaches for to undo whatever we tell them, and it is free now
+            // that it no longer confirms anything.
+            undo(bot)
         })
+    }
+
+    /** Move the cursor to the next card that is not already in the program. */
+    function nextFreeCard(bot: Bot) {
+        for (let i = 1; i <= bot.hand.length; i++) {
+            const at = (bot.selected + i) % bot.hand.length
+            if (bot.program.indexOf(at) < 0) { bot.selected = at; return }
+        }
     }
 
     function anyJoined(): boolean {
         for (let b of bots) if (b.joined) return true
         return false
-    }
-
-    function everyoneReady(): boolean {
-        let any = false
-        for (let bot of playing) {
-            if (bot.out) continue
-            if (!bot.ready) return false
-            any = true
-        }
-        return any
     }
 
     // ------------------------------------------------------------------
@@ -1272,11 +1423,10 @@ namespace roboRally {
     function beginLoop() {
         if (loopStarted) return
         loopStarted = true
-        makeUi()
         game.setGameOverScoringType(game.ScoringType.None)
         game.onUpdate(updateCamera)
         // NOT forked here. startGame is only the FIRST of the kid's setup
-        // blocks - "play with 4 robots" and "treasure is ..." have not run yet
+        // blocks - "play with 2 robots" and "treasure is ..." have not run yet
         // - and a kid may well have put a splash screen or a pause between
         // them. onUpdate is scene-scoped, so it does not tick at all while a
         // splash has a scene pushed, and the quiet window below covers an
@@ -1291,35 +1441,17 @@ namespace roboRally {
     }
 
     function gameLoop() {
+        // Here, not in beginLoop: by now the kid's whole "on start" stack has
+        // run, so the roster is final and we know whether this game needs a
+        // second screen at all.
+        makeUi()
         lobby()
         while (phase != PHASE_OVER) {
-            // Phase before the deal, so the freshly dealt hand already shows
-            // the cursor rather than waiting for the first left/right press.
-            phase = PHASE_PROGRAM
-            phaseAt = control.millis()
-            for (let bot of playing) if (!bot.out) deal(bot)
-            banner("VAELG KORT", 1)
-            // Bounded, unlike every other wait in here. One kid who puts the
-            // controller down without pressing B used to freeze the table for
-            // good, with no way out but a power cycle.
-            pauseUntil(everyoneReady, PROGRAM_TIMEOUT)
-            for (let bot of playing) {
-                if (bot.out || bot.ready) continue
-                // Fill what they did not choose, so their robot still does
-                // something and the round is not silently short.
-                while (bot.program.length < programSize(bot)) {
-                    let i = 0
-                    while (bot.program.indexOf(i) >= 0) i++
-                    bot.program.push(i)
-                }
-                bot.ready = true
-                drawRow(bot, -1, 0)
-            }
+            programPhase()
             phase = PHASE_EXECUTE
-            phaseAt = control.millis()
-            runRound()
+                runRound()
             if (phase == PHASE_OVER) return
-            pause(BEAT)
+            pause(GAP_PAUSE)
         }
     }
 
@@ -1330,12 +1462,19 @@ namespace roboRally {
      */
     function lobby() {
         phase = PHASE_LOBBY
-        phaseAt = control.millis()
         lobbyDone = false
         const opened = control.millis()
         const deadline = opened + LOBBY_TIMEOUT
         while (!lobbyDone && control.millis() < deadline) {
-            banner(((control.millis() >> 11) & 1) == 0 ? "TRYK A" : "P1: B=START", 1)
+            // Nothing else in the game ever mentions hosting, and a kid who
+            // just presses Play gets the one-screen fallback - which works, so
+            // they would never find out that the whole point of two robots is
+            // a screen each. Say it here, where they are already waiting.
+            const beat = (control.millis() >> 11) % (twoScreens && !splitScreens() ? 3 : 2)
+            let ask = "TRYK A"
+            if (beat == 1) ask = "P1: B=START"
+            else if (beat == 2) ask = "DEL OG HOST"
+            banner(ask, 1)
             // The roster is re-read every pass, so robots added by a setup
             // block that ran late are still picked up.
             const settled = control.millis() - opened > LOBBY_SETTLE
@@ -1356,71 +1495,234 @@ namespace roboRally {
 
         playing = []
         for (let b of bots) {
-            if (!b.joined) { b.out = true; continue }
+            if (!b.joined) { retire(b); continue }
             playing.push(b)
             b.sprite.setFlag(SpriteFlag.Invisible, false)
             placeOnStart(b)
         }
         layoutRows()
         countChests()
+        checkDeck()
         banner("", 1)
+    }
+
+    /**
+     * A card name is typed twice - once in "add cards" and once in the "on
+     * card played" hat - and matching two bits of text is the hardest thing
+     * this program asks of a nine year old. Until now a mismatch was invisible
+     * until the card came up mid-round and the robot said "X ?", by which time
+     * nobody remembers what they typed. Say it once, up front, before the
+     * first hand is even dealt. One problem at a time: fix that one and the
+     * next one shows up.
+     */
+    function checkDeck() {
+        let seen: string[] = []
+        for (let c of deck) {
+            if (seen.indexOf(c) >= 0) continue
+            seen.push(c)
+            // A card is 14 px wide and font5 is 6 px per character, so a
+            // longer name is CUT. Better to say so than to let a kid wonder
+            // why their "PRUT" card is called "PR".
+            if (ascii(c).length > 2) {
+                flash("LANGT: " + fit(c), 5, 4000)
+                return
+            }
+            if (c == JOKER) continue
+            let known = false
+            for (let i = 0; i < cardNames.length; i++) if (cardNames[i] == c) known = true
+            if (!known) {
+                flash("KORT? " + fit(c), 5, 4000)
+                return
+            }
+        }
+    }
+
+    /**
+     * Everybody picks four cards. How that is arranged depends on how many
+     * screens there are and how many kids are sharing them:
+     *
+     *  - One screen (a solo game, or a project running in the editor rather
+     *    than hosted): every row is on screen at once and everybody picks
+     *    together, which is how this game has always worked.
+     *  - Hosted with two players: one screen each, so they pick at the same
+     *    time and neither can read the other's hand.
+     *  - Hosted with three or four: player 1 has a screen to themselves and
+     *    starts immediately; the others take the second screen in turn,
+     *    player 2 then 3 then 4.
+     *
+     * Nobody presses a confirm button - the fourth card ends your turn - and
+     * nobody may hold up the table: fifteen seconds each, then the engine
+     * fills whatever is missing at random out of the cards left in your hand.
+     */
+    function programPhase() {
+        phase = PHASE_PROGRAM
+        // A robot that died last round is whole again the moment the next one
+        // is being programmed. Clearing this in runRound instead left its
+        // heart missing from the banner for the entire fifteen seconds.
+        for (let bot of playing) bot.dead = false
+        for (let bot of playing) if (!bot.out) deal(bot)
+
+        let host: Bot = null
+        let clients: Bot[] = []
+        for (let b of playing) {
+            if (!inPlay(b)) continue
+            if (b.player == 1) host = b
+            else clients.push(b)
+        }
+
+        if (!splitScreens() || clients.length <= 1) {
+            // One screen between them, or one screen each: either way there is
+            // nothing to take turns over.
+            banner("VAELG KORT", 1)
+            if (host) openProgram(host)
+            for (let c of clients) openProgram(c)
+            if (clients.length > 0) programOwner = clients[0]
+            pauseUntil(function () {
+                for (let b of playing) {
+                    if (inPlay(b) && !windowShut(b)) return false
+                }
+                return true
+            }, PROGRAM_TIME + 1000)
+        } else {
+            // More kids than screens. Player 1 has their own and starts at
+            // once; the second screen is handed along, one client at a time.
+            if (host) openProgram(host)
+            for (let c of clients) {
+                programOwner = c
+                openProgram(c)
+                pauseUntil(function () { return windowShut(c) }, PROGRAM_TIME + 1000)
+                forceReady(c)
+                // Player 1's fifteen seconds ran alongside the first client's,
+                // so close their window as soon as that one is done rather
+                // than leaving a stale cursor blinking on the server screen.
+                if (host) forceReady(host)
+            }
+        }
+        for (let b of playing) forceReady(b)
+        programOwner = null
+    }
+
+    function openProgram(bot: Bot) {
+        if (!bot || bot.out || bot.ready) return
+        bot.openedAt = control.millis()
+        bot.deadline = bot.openedAt + PROGRAM_TIME
+        // The row is a cached image, and the cursor is only drawn while the
+        // window is open - so it has to be rebuilt HERE. Without this a kid
+        // sees no cursor at all until they happen to press left or right.
+        drawRow(bot, -1, 0)
+    }
+
+    function windowShut(bot: Bot): boolean {
+        if (!bot) return true
+        return bot.out || bot.ready || control.millis() > bot.deadline
+    }
+
+    /**
+     * Time is up. Fill whatever is missing at random out of the cards still in
+     * the hand, so a kid who was staring out of the window still has a robot
+     * that does something and the round is not silently short.
+     */
+    function forceReady(bot: Bot) {
+        if (!bot || bot.out || bot.ready) return
+        while (bot.program.length < programSize(bot)) {
+            let free: number[] = []
+            for (let i = 0; i < bot.hand.length; i++) {
+                if (bot.program.indexOf(i) < 0) free.push(i)
+            }
+            if (free.length == 0) break
+            bot.program.push(free[randint(0, free.length - 1)])
+        }
+        bot.ready = true
+        bot.deadline = 0
+        // Cards appearing out of nowhere is baffling unless you are told why -
+        // and with three kids sharing the second screen it has to say WHOSE
+        // time ran out, or the next one in the queue thinks it means them.
+        flash("P" + bot.player + " TID UDE", bot.color, 1400)
+        bot.sprite.sayText("Tiden er gaaet!", 1200)
+        drawRow(bot, -1, 0)
     }
 
     /**
      * Register by register, robot by robot, then the board: the board game's
      * order of play, and the same order the Minecraft tick phases will use.
-     * Each robot's turn waits for that kid to press A, so four nine year olds
-     * can follow what is happening to whom.
+     *
+     * One turn is five beats half a second apart, because four nine year olds
+     * cannot follow anything faster: the camera arrives, the robot says what it
+     * is about to do, it does it, the bubble comes down, and the next robot
+     * goes. In between, the kid whose robot it is presses A - or three seconds
+     * pass and it happens anyway. A solo player is never asked to press
+     * anything: there is nobody else to keep up with.
      */
     function runRound() {
-        for (let bot of playing) bot.dead = false
+        const solo = playing.length <= 1
         for (let reg = 0; reg < PROGRAM_SIZE; reg++) {
             for (let bot of playing) {
                 if (!inPlay(bot) || bot.dead) continue
                 if (reg >= bot.program.length) continue
-                activeBot = bot
-                waitForTurn(bot)
-                if (!inPlay(bot) || bot.dead) { activeBot = null; continue }
-
                 const card = bot.hand[bot.program[reg]]
-                // Say it, then do it, then put it away. Three separate beats,
-                // so the kids can follow which card is running.
+
+                // 1. the camera arrives
+                activeBot = bot
                 banner("", bot.color)
                 drawRow(bot, reg, 1)
+                pause(FOCUS_PAUSE)
+
+                // 2. the robot says what it is about to do
                 bot.sprite.sayText(card, BUBBLE_MS)
-                pause(BEAT)
-                // Down before the card runs, not after: a card is allowed to
-                // say something of its own, and clearing afterwards would wipe
-                // it - including the "<card> ?" warning for a misspelt card.
-                bot.sprite.sayText("")
+                if (solo) pause(READ_PAUSE)
+                else waitForTurn(bot)
+                if (!inPlay(bot) || bot.dead) {
+                    bot.sprite.sayText("")
+                    activeBot = null
+                    continue
+                }
+
+                // 3. and does it, with the bubble still up
                 current = bot
                 landBudget = MAX_TILE_CHAIN
-                playCard(card, bot)
+                charging = true
+                const understood = playCard(card, bot)
+                charging = false
                 checkLanded(bot)
                 current = null
-                pause(BEAT)
+
+                // 4. the bubble comes down half a second later - unless it is
+                //    the "I do not know this card" warning, which is the whole
+                //    point of that message and has a lifetime of its own.
+                pause(ACT_PAUSE)
+                if (understood) bot.sprite.sayText("")
                 drawRow(bot, reg, 2)
-                pause(BEAT)
+
+                // 5. and half a second after that, the next robot goes
+                pause(GAP_PAUSE)
                 activeBot = null
                 if (checkEnd()) return
             }
+            // The board gets the same rhythm: say what is about to happen, let
+            // it happen, then a beat before the next register.
             banner("BANEN", 1)
+            pause(BOARD_PAUSE)
             boardPhase()
+            pause(BOARD_PAUSE)
+            banner("", 1)
             if (checkEnd()) return
         }
     }
 
-    /** Hold the round until this robot's own player presses A. */
+    /** Hold the round until this robot's own player presses A, or three seconds. */
     function waitForTurn(bot: Bot) {
-        focusCamera(bot)
         bot.aPressed = false
         turnDeadline = control.millis() + TURN_TIMEOUT
         banner("TRYK A", bot.color)
-        pauseUntil(() => bot.aPressed || control.millis() > turnDeadline || bot.out)
+        pauseUntil(function () {
+            return bot.aPressed || control.millis() > turnDeadline || bot.out || bot.dead
+        })
         turnDeadline = 0
+        banner("", bot.color)
     }
 
-    function playCard(card: string, bot: Bot) {
+    /** Returns false only when nothing in the kid's program knows this card. */
+    function playCard(card: string, bot: Bot): boolean {
         let played = false
         for (let i = 0; i < cardNames.length; i++) {
             if (cardNames[i] == card) {
@@ -1428,8 +1730,15 @@ namespace roboRally {
                 played = true
             }
         }
+        // The engine hands out jokers whether or not the kid wrote a rule for
+        // one, so it has to know what a joker does by itself.
+        if (!played && card == JOKER) {
+            randomAction()
+            return true
+        }
         // A card with no rule is a spelling mistake, and an invisible one.
-        if (!played) bot.sprite.sayText(card + " ?", BUBBLE_MS)
+        if (!played) bot.sprite.sayText(card + " ?", MISSING_MS)
+        return played
     }
 
     // ------------------------------------------------------------------
@@ -1449,14 +1758,13 @@ namespace roboRally {
      * Every way the game can end, checked between cards. Nothing here may run
      * from a render pass or a button handler: game over blocks and never
      * returns to its caller.
+     *
+     * Note that "last robot standing" can no longer happen by itself now that
+     * robots respawn for ever. It is kept for a kid who writes a rule that
+     * takes somebody out of the game; the ending that actually fires is the
+     * treasure one.
      */
     function checkEnd(): boolean {
-        // A robot may have hit zero lives inside the HUD render pass, where
-        // the handler can only raise a flag - it must not block, so it cannot
-        // take the robot off the board itself. Test `retired`, not `out`: the
-        // handler sets `out` first, which used to make this sweep dead code.
-        for (let b of playing) if (!b.retired && (b.out || b.inf.life() <= 0)) retire(b)
-
         if (pendingWinner > 0) return finish(pendingWinner)
 
         let alive: Bot[] = []
@@ -1466,13 +1774,9 @@ namespace roboRally {
             game.gameOver(false)
             return true
         }
-        // Last robot standing.
         if (playing.length > 1 && alive.length == 1) return finish(alive[0].player)
         // Every chest opened: most chests wins, and a tie is a draw.
         if (chestsTotal > 0 && chestsLeft == 0) {
-            // Only robots still in the game can win it. A robot that ran out
-            // of lives three rounds ago does not get to take the trophy on
-            // the strength of the chests it opened before it died.
             let best = -1
             for (let b of alive) if (b.chests > best) best = b.chests
             let winners: Bot[] = []
@@ -1493,44 +1797,94 @@ namespace roboRally {
     }
 
     // ------------------------------------------------------------------
-    // Engine internals: camera
+    // Engine internals: screens and camera
     // ------------------------------------------------------------------
 
     /**
+     * True when this game really does have two views to fill. The roster
+     * question is settled once, but the hosting question is asked every frame:
+     * the same project is built in the editor on one screen and played online
+     * on two, and the one-screen layout has to keep working or nobody can see
+     * their cards while they are making the thing.
+     */
+    function splitScreens(): boolean {
+        return twoScreens && getOrigin() == "server"
+    }
+
+    /**
      * The board is bigger than the screen, so the view has to choose. During a
-     * turn it sits on the robot playing; while everybody is programming it
-     * sits between them, and any kid can pull it onto their own robot with
-     * down. The offset lifts the robot above the card rows.
+     * turn both screens sit on the robot that is playing. While everybody is
+     * programming, each screen sits on the robot belonging to whoever owns it -
+     * which is the whole reason for having two, because there is no longer a
+     * single camera for four kids to fight over.
      */
     function cameraLift(): number {
         let top = BOTTOM_ROW_Y
-        for (let b of playing) if (b.rowY >= 0 && b.rowY < top) top = b.rowY
+        // Only one row is on screen while programming; all of them during a
+        // round. Lift the robot clear of whichever is showing.
+        if (phase != PHASE_PROGRAM || !splitScreens()) {
+            for (let b of playing) if (b.rowY >= 0 && b.rowY < top) top = b.rowY
+        }
         const middle = (BANNER_H + top - 1) >> 1
         return (screen.height >> 1) - middle
     }
 
-    function focusCamera(bot: Bot) {
-        scene.centerCameraAt(bot.sprite.x, bot.sprite.y + cameraLift())
+    function centerOn(server: boolean, bot: Bot) {
+        if (!bot) return
+        const x = bot.sprite.x
+        const y = bot.sprite.y + cameraLift()
+        if (!twoScreens) { scene.centerCameraAt(x, y); return }
+        secondScreen.centerCameraAt(server
+            ? secondScreen.DrawMode.JustServer
+            : secondScreen.DrawMode.JustClients, x, y)
+    }
+
+    function centerBoth(x: number, y: number) {
+        if (!twoScreens) { scene.centerCameraAt(x, y); return }
+        secondScreen.centerCameraAt(secondScreen.DrawMode.AllPlayers, x, y)
+    }
+
+    function shakeCameras(amp: number, ms: number) {
+        if (!twoScreens) { scene.cameraShake(amp, ms); return }
+        secondScreen.cameraShake(secondScreen.DrawMode.AllPlayers, amp, ms)
+    }
+
+    /** Whose robot the given screen is watching while everybody programs. */
+    function screenOwner(server: boolean): Bot {
+        if (server) {
+            for (let b of playing) if (inPlay(b) && b.player == 1) return b
+            // No player 1 at the table, so the server screen has nothing of
+            // its own to watch and may as well follow the client screen.
+            return programOwner
+        }
+        return programOwner
     }
 
     function updateCamera() {
         if (phase == PHASE_LOBBY || phase == PHASE_OVER) return
         if (phase == PHASE_EXECUTE) {
-            if (activeBot) focusCamera(activeBot)
+            // Whoever is acting owns both screens: the point of a turn is that
+            // everybody is watching the same robot.
+            if (activeBot) {
+                centerOn(true, activeBot)
+                if (twoScreens) centerOn(false, activeBot)
+            }
             return
         }
-        if (peekBot && control.millis() < peekUntil) {
-            focusCamera(peekBot)
+        if (splitScreens()) {
+            centerOn(true, screenOwner(true))
+            centerOn(false, screenOwner(false))
             return
         }
-        // Between everybody, so no kid is completely in the dark.
+        // One screen, so it has to sit between everybody. This is the old
+        // behaviour, kept for solo play and for the editor.
         let n = 0, sx = 0, sy = 0
         for (let b of playing) {
             if (!inPlay(b)) continue
             n++; sx += b.sprite.x; sy += b.sprite.y
         }
         if (n == 0) return
-        scene.centerCameraAt(sx / n, sy / n + cameraLift())
+        centerBoth(sx / n, sy / n + cameraLift())
     }
 
     // ------------------------------------------------------------------
@@ -1542,10 +1896,10 @@ namespace roboRally {
         bannerColor = color
     }
 
-    function flash(text: string, color: number) {
+    function flash(text: string, color: number, ms: number) {
         flashText = text
         flashColor = color
-        flashUntil = control.millis() + 1400
+        flashUntil = control.millis() + ms
     }
 
     /** One card row per player, stacked up from the bottom of the screen. */
@@ -1562,37 +1916,70 @@ namespace roboRally {
     function makeUi() {
         if (uiMade) return
         uiMade = true
-        // One renderable instead of forty card sprites. It draws after the
-        // tilemap and before the robot (z 95), which is the only point where
-        // "the tiles behind a card" still exist to be darkened - and unlike a
-        // sprite it can simply not draw a row, which is how rows are hidden.
-        // (Moving a card off screen is not an option: mapRect clamps rather
-        // than no-ops in the simulator, and would smear a line down the edge.)
-        scene.createRenderable(90, drawUi)
+        twoScreens = bots.length > 1
+        if (twoScreens) {
+            // Two renderables rather than one, because the two screens do not
+            // show the same cards. Registering them is also what installs the
+            // extension's dual render pass, so a solo game never pays for it.
+            secondScreen.renderOnZIndex(UI_Z, secondScreen.DrawMode.JustServer,
+                function (target: Image) { drawUi(target, true) })
+            secondScreen.renderOnZIndex(UI_Z, secondScreen.DrawMode.JustClients,
+                function (target: Image) { drawUi(target, false) })
+        } else {
+            // One renderable instead of forty card sprites. It draws after the
+            // tilemap and before the robot (z 95), which is the only point
+            // where "the tiles behind a card" still exist to be darkened - and
+            // unlike a sprite it can simply not draw a row, which is how rows
+            // are hidden. (Moving a card off screen is not an option: mapRect
+            // clamps rather than no-ops in the simulator, and would smear a
+            // dimmed line down the edge of the board.)
+            scene.createRenderable(UI_Z, function (target: Image) { drawUi(target, true) })
+        }
     }
 
-    function drawUi(target: Image, camera: scene.Camera) {
-        for (let b of playing) {
-            if (b.rowY < 0 || b.out) continue
-            // Darken the board only behind cards that are actually there.
-            // Dimming an empty slot punches a dark rectangle into the board.
-            for (let i = 0; i < b.program.length; i++) {
-                target.mapRect(PROGRAM_X + i * PITCH, b.rowY, CARD_W, CARD_H, DIM)
+    function drawUi(target: Image, isServer: boolean) {
+        const split = splitScreens()
+        // Without a split there is only one picture worth drawing, and it is
+        // the server's; the client image is rendered but nobody ever sees it.
+        if (!split && !isServer) return
+        if (phase == PHASE_PROGRAM && split) {
+            // Your hand, on your screen, and nobody else's.
+            const owner = screenOwner(isServer)
+            if (owner) paintRow(target, owner, BOTTOM_ROW_Y)
+        } else if (phase == PHASE_PROGRAM || phase == PHASE_EXECUTE) {
+            // Either one screen for everybody, or a round in progress: the
+            // programs are committed and public by then, and seeing all four
+            // rows is how you follow what is about to happen.
+            for (let b of playing) {
+                if (b.rowY < 0 || b.out) continue
+                paintRow(target, b, b.rowY)
             }
-            for (let i = 0; i < b.hand.length; i++) {
-                target.mapRect(HAND_X + i * PITCH, b.rowY, CARD_W, CARD_H, DIM)
-            }
-            target.drawTransparentImage(b.rowImage, 0, b.rowY)
         }
-        drawBanner(target)
+        drawBanner(target, isServer)
+    }
+
+    function paintRow(target: Image, b: Bot, y: number) {
+        // Darken the board only behind cards that are actually there.
+        // Dimming an empty slot punches a dark rectangle into the board.
+        for (let i = 0; i < b.program.length; i++) {
+            target.mapRect(PROGRAM_X + i * PITCH, y, CARD_W, CARD_H, DIM)
+        }
+        for (let i = 0; i < b.hand.length; i++) {
+            target.mapRect(HAND_X + i * PITCH, y, CARD_W, CARD_H, DIM)
+        }
+        target.drawTransparentImage(b.rowImage, 0, y)
     }
 
     /**
-     * The top line: who is playing, how many lives they have left, how many
-     * chests are still out there, and whose turn it is. It replaces the native
-     * four-corner HUD, which would sit exactly on top of the card rows.
+     * The top line: who is playing, how much health they have left, how many
+     * chests are still out there, and what this screen is waiting for. It
+     * replaces the native four-corner HUD, which would sit exactly on top of
+     * the card rows.
+     *
+     * Health is one heart per robot: full for two hits left, half for one, and
+     * nothing at all for the moment between dying and coming back.
      */
-    function drawBanner(target: Image) {
+    function drawBanner(target: Image, isServer: boolean) {
         let x = 2
         // In the lobby nobody is in `playing` yet, but the whole point of the
         // lobby is to show who has pressed A, so show every seat there.
@@ -1601,38 +1988,81 @@ namespace roboRally {
             const lit = !b.out && (phase != PHASE_LOBBY || b.joined)
             target.fillRect(x, 0, 8, 7, lit ? b.color : 11)
             target.print("" + b.player, x + 1, 1, 1, image.font5)
-            if (lit) {
-                // One digit only: the seats sit on a 17 px pitch and a second
-                // digit is painted over by the next badge.
-                const lives = Math.min(9, Math.max(0, b.inf.life()))
-                target.print("" + lives, x + 9, 1, 1, image.font5)
+            if (lit && !b.dead) {
+                const hp = b.inf.life()
+                if (hp >= START_HEALTH) target.drawTransparentImage(HEART, x + 9, 1)
+                else if (hp > 0) target.drawTransparentImage(HALF_HEART, x + 9, 1)
             }
             x += 17
         }
         if (chestsLeft >= 0) {
+            plate(target, 73, ("K" + chestsLeft).length)
             target.print("K" + chestsLeft, 74, 1, 5, image.font5)
         }
         let text = bannerText
         let color = bannerColor
+        if (phase == PHASE_PROGRAM) {
+            const line = programLine(isServer)
+            text = line.text
+            color = line.color
+        }
         if (control.millis() < flashUntil) {
             text = flashText
             color = flashColor
         }
-        if (turnDeadline > 0) {
-            const left = Math.idiv(turnDeadline - control.millis() + 999, 1000)
-            if (left <= 5) text = "TRYK A " + Math.max(0, left)
-        }
         if (text.length > 0) {
-            target.print(text, screen.width - 2 - text.length * 6, 1, color, image.font5)
+            const tx = screen.width - 2 - text.length * 6
+            plate(target, tx - 1, text.length)
+            target.print(text, tx, 1, color, image.font5)
         }
+    }
+
+    /**
+     * The banner is painted straight onto the board, and the board is not a
+     * background colour - a yellow chest counter over a yellow conveyor belt
+     * is simply not there. The seats have their own filled boxes; this gives
+     * the text the same courtesy without blacking out the whole top row.
+     */
+    function plate(target: Image, x: number, chars: number) {
+        target.fillRect(x, 0, chars * image.font5.charWidth + 1, 7, 15)
+    }
+
+    /**
+     * What this particular screen is waiting for while everybody programs:
+     * your own countdown if it is your turn, otherwise whose turn it is. The
+     * two screens say different things, which is the point of having two.
+     */
+    function programLine(isServer: boolean): BannerLine {
+        if (!splitScreens()) {
+            let latest = 0
+            for (let b of playing) {
+                if (programming(b) && b.deadline > latest) latest = b.deadline
+            }
+            if (latest == 0) return new BannerLine("KLAR", 1)
+            return new BannerLine("VAELG " + secondsLeft(latest), 1)
+        }
+        const owner = screenOwner(isServer)
+        if (owner && programming(owner)) {
+            return new BannerLine("VAELG " + secondsLeft(owner.deadline), owner.color)
+        }
+        // Not your turn: say whose it is, so the kids sharing the second
+        // screen know who they are waiting for.
+        if (programOwner && programming(programOwner)) {
+            return new BannerLine("P" + programOwner.player + " VAELGER", programOwner.color)
+        }
+        return new BannerLine("KLAR", 1)
+    }
+
+    function secondsLeft(deadline: number): number {
+        return Math.max(0, Math.idiv(deadline - control.millis() + 999, 1000))
     }
 
     /**
      * Rebuild one player's row. Called on every change rather than every
      * frame: the row is a cached image the renderable only has to blit.
      *
-     * running/style let the executing card light up: slot `reg` is drawn
-     * solid while its card runs and grey once it is spent.
+     * reg/regStyle let the executing card light up: slot `reg` is drawn solid
+     * while its card runs and grey once it is spent.
      */
     function drawRow(bot: Bot, reg: number, regStyle: number) {
         const im = bot.rowImage
@@ -1646,7 +2076,7 @@ namespace roboRally {
         for (let i = 0; i < bot.hand.length; i++) {
             let style = 0
             if (bot.program.indexOf(i) >= 0) style = 2
-            if (i == bot.selected && !bot.ready && phase == PHASE_PROGRAM) {
+            if (i == bot.selected && programming(bot)) {
                 style = style == 2 ? 3 : 1
             }
             drawCard(im, HAND_X + i * PITCH, bot.hand[i], style, bot.color)
@@ -1687,9 +2117,32 @@ namespace roboRally {
      * shorten it, a smeared row is not.
      */
     function fit(card: string): string {
+        const label = ascii(card)
         const max = (CARD_W - 2) / image.font5.charWidth
-        if (card.length <= max) return card
-        return card.substr(0, max)
+        if (label.length <= max) return label
+        return label.substr(0, max)
+    }
+
+    /**
+     * font5 has 113 glyphs and not one Danish letter, so a card the kids
+     * naturally call "OE" comes out as a hole in the card. Spell it the way
+     * the engine's own text already does. (Speech bubbles do NOT need this:
+     * sayText picks its font with image.getFontForText, which lands on font8,
+     * and font8 has all six.)
+     */
+    function ascii(s: string): string {
+        let out = ""
+        for (let i = 0; i < s.length; i++) {
+            const c = s.charCodeAt(i)
+            if (c == 0xE6) out += "ae"
+            else if (c == 0xC6) out += "AE"
+            else if (c == 0xF8) out += "oe"
+            else if (c == 0xD8) out += "OE"
+            else if (c == 0xE5) out += "aa"
+            else if (c == 0xC5) out += "AA"
+            else out += s.charAt(i)
+        }
+        return out
     }
 
     function centerX(card: string): number {

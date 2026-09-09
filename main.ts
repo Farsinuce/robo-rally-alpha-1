@@ -29,10 +29,15 @@ roboRally.addCards(2, "H")
 roboRally.addCards(1, "U")
 roboRally.addCards(1, "S")
 roboRally.addCards(1, "P")
+// Jokeren. Du faar ogsaa en gratis hver gang nogen skyder
+// eller maser dig - og du bestemmer ikke selv hvad den goer.
+roboRally.addCards(1, "?")
 roboRally.startGame(mySprite, assets.tile`start`)
-// Fire robotter. Motoren kopierer din tegning og farver den om,
-// en farve til hver spiller, og giver hver robot sin egen trappe.
-roboRally.addRobots(4)
+// To robotter. Motoren kopierer din tegning og farver den om, en
+// farve til hver spiller, og giver hver robot sin egen trappe.
+// Du kan skrue op til 4 - saa deles spiller 2, 3 og 4 om den anden
+// skaerm og vaelger kort paa skift.
+roboRally.addRobots(2)
 // Den der åbner flest kister vinder. Er der flere om førstepladsen
 // bliver det uafgjort.
 roboRally.treasure(assets.tile`chest`, assets.tile`chestOpen`)
@@ -67,6 +72,10 @@ roboRally.onCardPlayed("U", function (robot) {
 roboRally.onCardPlayed("S", function (robot) {
     roboRally.shoot()
 })
+// ? for jokeren: et tilfaeldigt kort fra bunken
+roboRally.onCardPlayed("?", function (robot) {
+    roboRally.randomAction()
+})
 roboRally.onCardPlayed("P", function (robot) {
     robot.sayText("PRUT!", 700)
     music.play(music.melodyPlayable(music.buzzer), music.PlaybackMode.InBackground)
@@ -75,8 +84,9 @@ roboRally.onCardPlayed("P", function (robot) {
 // ---------------------------------------------------------------
 // Felterne: et blok-hoved for hvert felt du maler på banen
 // ---------------------------------------------------------------
+// Lava: to hits, og det er praecis nok til at slaa dig ihjel
 roboRally.onLand(assets.tile`lava`, function (robot) {
-    roboRally.die()
+    roboRally.takeHits(2)
 })
 roboRally.onLand(assets.tile`hole`, function (robot) {
     roboRally.die()
@@ -96,7 +106,7 @@ roboRally.onBetweenCards(assets.tile`conveyorUp`, function (robot) {
 roboRally.onBetweenCards(assets.tile`conveyorDown`, function (robot) {
     roboRally.push(RoboDirection.Down)
 })
-// Laseren fyrer mellem hvert kort: står du i strålen koster det et liv
+// Laseren fyrer mellem hvert kort: står du i strålen koster det et hit
 roboRally.onBetweenCards(assets.tile`laser`, function (robot) {
-    roboRally.changeLives(-1)
+    roboRally.takeHits(1)
 })
