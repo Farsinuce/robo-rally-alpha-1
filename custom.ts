@@ -54,7 +54,7 @@ namespace roboRally {
     // that half a heart means something. Two hits - one heart - is the
     // default; "everybody starts with N hearts" moves it. Nobody is ever
     // eliminated whatever it is set to.
-    const MAX_HEARTS = 4
+    const MAX_HEALTH = 8
     let startHits = 2
 
     // ---- Pacing --------------------------------------------------------
@@ -149,6 +149,9 @@ namespace roboRally {
     const HAND_X = (160 - HAND_W) >> 1  // 35
     const HAND_Y = 88
     const BANNER_H = 8
+    // Badge 8 + a gap + a heart or a digit + a gap. Four of these is 68 px,
+    // which leaves the right hand half of the row for the message.
+    const SEAT_PITCH = 17
     const UI_Z = 90
 
     // The join overlay: a black card in the middle of a darkened board.
@@ -221,6 +224,13 @@ namespace roboRally {
         . 5 4 5 .
         . . 5 . .
     `
+    // A machine tile asleep: the same drawing with the energy taken out of
+    // it. Identity except red -> dark, orange -> mortar grey, yellow -> dark,
+    // which is exactly the recolouring the six hand-drawn "Off" tiles used to
+    // apply - they were replaced by this, byte for byte, so that My Tiles has
+    // nothing in it a kid is not meant to paint.
+    const SLEEP = hex`00010c030b0c060708090a0b0c0d0e0f`
+
     const HALF_HEART = img`
         . 2 2 . 2 2 .
         2 2 2 2 . . 2
@@ -523,50 +533,72 @@ namespace roboRally {
     }
 
     /**
-     * Two drawings of the same thing: switched on, and switched off. The tile
-     * sits dark all the way through programming and only wakes up when the
-     * board takes its turn - it lights up, everything standing on it happens,
-     * and it goes dark again.
+     * A machine: a tile that does nothing at all until the board takes its
+     * turn. It sits dark the whole time everybody is choosing cards, then on
+     * its step it lights up, whatever is standing on it happens, and it goes
+     * dark again.
      *
      * The step number is what puts the machines in order. Everything on step 1
-     * lights up and acts, then everything on step 2, and so on, so belts on
-     * step 1 and lasers on step 2 means you are carried first and shot at
-     * wherever you end up.
-     * @param on what the tile looks like while it is working
-     * @param off what the very same tile looks like while it is not
+     * wakes up and acts, then everything on step 2, so belts on step 1 and
+     * lasers on step 2 means you are carried first and shot at wherever you
+     * end up.
+     *
+     * You only pick the lit tile. The engine draws the sleeping version of it
+     * for you, which is why there are no "off" tiles to hunt for.
+     * @param tile the tile from your map, the way you painted it
      * @param step which part of the board's turn it belongs to, eg: 1
      */
     //% blockId=roboRally_blinkTiles
-    //% block="$on turns off to $off||on board step $step"
-    //% expandableArgumentMode="toggle"
-    //% on.shadow=tileset_tile_picker
-    //% on.decompileIndirectFixedInstances=true
-    //% off.shadow=tileset_tile_picker
-    //% off.decompileIndirectFixedInstances=true
+    //% block="$tile only wakes up on board step $step"
+    //% tile.shadow=tileset_tile_picker
+    //% tile.decompileIndirectFixedInstances=true
     //% step.defl=1 step.min=1 step.max=4
     //% group="Setup" weight=70
-    export function blinkTiles(on: Image, off: Image, step: number = 1) {
+    export function blinkTiles(tile: Image, step: number) {
         setupAt = control.millis()
-        blinkOn.push(on)
-        blinkOff.push(off)
+        blinkOn.push(tile)
+        blinkOff.push(sleeping(tile))
         blinkStep.push(Math.max(1, Math.min(MAX_BOARD_STEPS, step)))
     }
 
     /**
+     * The sleeping version of a machine tile: the same drawing, dimmed, so a
+     * stopped belt still shows which way it WILL carry you and a cold laser
+     * still shows where its beam will be. A machine you cannot see when it is
+     * off is a machine you cannot plan around.
+     *
+     * Derived rather than drawn. There used to be six hand-drawn twins for
+     * this and they sat in My Tiles looking like something to paint with; this
+     * reproduces every one of them byte for byte and shows the kids nothing.
+     *
+     * The tilemap has never heard of this image, so getImageType appends it to
+     * the live tileset the first time it is used. That is the one case where
+     * that behaviour is what we want - the image is kept, so it matches by
+     * pixels from then on - and there is room, because the index only has to
+     * fit in a byte.
+     */
+    function sleeping(tile: Image): Image {
+        const off = tile.clone()
+        off.mapRect(0, 0, off.width, off.height, SLEEP)
+        return off
+    }
+
+    /**
      * How much health every robot starts with, and gets back when it respawns
-     * or opens a chest. One heart is two hits: a full heart, then half a
-     * heart, then down. Leave it out and everybody gets one heart.
-     * @param hearts how many hearts, eg: 1
+     * or opens a chest. Two - a whole heart - is the default: a full heart,
+     * then half a heart, then down. Above two the banner shows a plain number
+     * instead of the heart.
+     * @param health how many hits it takes to bring a robot down, eg: 2
      */
     //% blockId=roboRally_startHealth
-    //% block="everybody starts with $hearts hearts"
-    //% hearts.defl=1 hearts.min=1 hearts.max=4
+    //% block="everybody starts with $health health"
+    //% health.defl=2 health.min=1 health.max=8
     //% group="Setup" weight=72
-    export function startHealth(hearts: number) {
+    export function startHealth(health: number) {
         setupAt = control.millis()
-        if (hearts < 1) hearts = 1
-        if (hearts > MAX_HEARTS) hearts = MAX_HEARTS
-        startHits = hearts * 2
+        if (health < 1) health = 1
+        if (health > MAX_HEALTH) health = MAX_HEALTH
+        startHits = health
         // A kid who drops this block in after the robots are already on the
         // board should see it take effect, not next round.
         for (let b of bots) if (b.inf) b.inf.setLife(startHits)
@@ -2315,21 +2347,14 @@ namespace roboRally {
         // The lobby has its own, much larger, answer to "who is in" - the
         // chips under the box - so the eight pixel badges stay out of its way.
         if (phase == PHASE_LOBBY) { drawMessage(target, isServer); return }
-        const hearts = Math.idiv(startHits + 1, 2)
-        // Four hearts each for four players is 164 px of a 160 px screen, so
-        // past two the row collapses to one heart and a number.
-        // Hearts side by side while they fit; past that it is one heart and a
-        // number, which needs badge 8 + heart 7 + digit 6 + a gap.
-        const wide = playing.length * (10 + hearts * 8) <= 96
-        const pitch = wide ? 10 + hearts * 8 : 23
         let x = 2
         let anyChests = false
         for (let b of playing) {
             target.fillRect(x, 0, 8, 7, b.out ? 11 : b.color)
             target.print("" + b.player, x + 1, 1, 1, image.font5)
-            if (!b.out && !b.dead) drawHealth(target, b, x + 9, hearts, wide)
+            if (!b.out && !b.dead) drawHealth(target, b, x + 9)
             if (b.chests > 0) anyChests = true
-            x += pitch
+            x += SEAT_PITCH
         }
         // A gem under each player for every chest they have opened, which is
         // the score - and the score is the whole point of the board, so it
@@ -2342,13 +2367,13 @@ namespace roboRally {
                     target.drawTransparentImage(GEM, x + 1, 8)
                     target.print("" + b.chests, x + 7, 8, 5, image.font5)
                 }
-                x += pitch
+                x += SEAT_PITCH
             }
         }
         if (chestsLeft >= 0) {
-            // On the SECOND row, right hand end. The top row is seats on the
-            // left and the message on the right, and with four players and
-            // more than one heart each there is nothing left between them.
+            // On the SECOND row, right hand end, with the gems: the top row is
+            // seats on the left and the message on the right, and both of
+            // those can grow.
             const text = "K" + chestsLeft
             const cx = screen.width - 2 - text.length * 6
             plateAt(target, cx - 1, 7, text.length)
@@ -2358,25 +2383,20 @@ namespace roboRally {
     }
 
     /**
-     * Hearts, two hits to each. Up to two are drawn side by side; beyond that
-     * there is no room for four players, so it becomes one heart and a number.
+     * ONE glyph per robot, always. Two health is a heart and one is half a
+     * heart, which is the whole reason health is counted in twos - and above
+     * two it is a plain red number instead, because a row of hearts does not
+     * fit (four players with four each is 164 px of a 160 px screen) and a
+     * heart with a number stuck to it reads as neither.
+     *
+     * So the heart is not a unit, it is what "nearly dead" looks like: you see
+     * numbers counting down, then a heart, then half a heart, then nothing.
      */
-    function drawHealth(target: Image, b: Bot, x: number, hearts: number, wide: boolean) {
+    function drawHealth(target: Image, b: Bot, x: number) {
         const hp = b.inf.life()
-        if (!wide) {
-            if (hp <= 0) return
-            target.drawTransparentImage(HEART, x, 1)
-            // The number needs its own black backing or it is white text on a
-            // tan floor, which is the same as no number at all.
-            plateAt(target, x + 7, 0, 1)
-            target.print("" + Math.idiv(hp + 1, 2), x + 8, 1, 1, image.font5)
-            return
-        }
-        for (let i = 0; i < hearts; i++) {
-            const left = hp - i * 2
-            if (left >= 2) target.drawTransparentImage(HEART, x + i * 8, 1)
-            else if (left == 1) target.drawTransparentImage(HALF_HEART, x + i * 8, 1)
-        }
+        if (hp >= 3) target.print("" + hp, x, 1, 2, image.font5)
+        else if (hp >= 2) target.drawTransparentImage(HEART, x, 1)
+        else if (hp > 0) target.drawTransparentImage(HALF_HEART, x, 1)
     }
 
     /** The right hand end of the banner: what this screen is waiting for. */

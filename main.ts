@@ -26,8 +26,9 @@ roboRally.startGame(mySprite, assets.tile`start`)
 // Du kan skrue op til 4 - så deles spiller 2, 3 og 4 om den anden
 // skærm og vælger kort på skift.
 roboRally.addRobots(2)
-// Ét hjerte er to hits. Skru op hvis banen er for hård.
-roboRally.startHealth(1)
+// To i helbred er ét hjerte. Skru op hvis banen er for hård -
+// over to viser banneret et rødt tal i stedet for hjertet.
+roboRally.startHealth(2)
 // Den der åbner flest kister vinder. Er der flere om førstepladsen
 // bliver det uafgjort.
 roboRally.treasure(assets.tile`chest`, assets.tile`chestOpen`)
@@ -35,17 +36,17 @@ roboRally.treasure(assets.tile`chest`, assets.tile`chestOpen`)
 // ---------------------------------------------------------------
 // Maskinerne på banen: de sover, indtil banen får sin tur
 // ---------------------------------------------------------------
-// Hvert felt her har to tegninger: en tændt og en slukket. De står
-// slukkede hele tiden mens I vælger kort, og vågner kun når banen
+// Felterne her sover, mens I vælger kort, og vågner kun når banen
 // får sin tur. Trin-nummeret er rækkefølgen: FØRST kører båndene
 // (trin 1), BAGEFTER skyder laserne (trin 2) - så du bliver flyttet
-// først og skudt der, hvor du ender.
-roboRally.blinkTiles(assets.tile`conveyorRight`, assets.tile`conveyorRightOff`, 1)
-roboRally.blinkTiles(assets.tile`conveyorLeft`, assets.tile`conveyorLeftOff`, 1)
-roboRally.blinkTiles(assets.tile`conveyorUp`, assets.tile`conveyorUpOff`, 1)
-roboRally.blinkTiles(assets.tile`conveyorDown`, assets.tile`conveyorDownOff`, 1)
-roboRally.blinkTiles(assets.tile`laserH`, assets.tile`laserHOff`, 2)
-roboRally.blinkTiles(assets.tile`laserV`, assets.tile`laserVOff`, 2)
+// først og skudt der, hvor du ender. Du vælger kun det TÆNDTE felt;
+// motoren tegner selv den slukkede udgave af det.
+roboRally.blinkTiles(assets.tile`conveyorRight`, 1)
+roboRally.blinkTiles(assets.tile`conveyorLeft`, 1)
+roboRally.blinkTiles(assets.tile`conveyorUp`, 1)
+roboRally.blinkTiles(assets.tile`conveyorDown`, 1)
+roboRally.blinkTiles(assets.tile`laserH`, 2)
+roboRally.blinkTiles(assets.tile`laserV`, 2)
 
 // ---------------------------------------------------------------
 // Kortene: ét blok-hoved pr. kort. Navnet, hvor mange der er i
