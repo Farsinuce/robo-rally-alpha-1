@@ -20,77 +20,78 @@ let mySprite = sprites.create(img`
     . . . . . . . . . . . . . . . .
     `, SpriteKind.Player)
 tiles.setCurrentTilemap(tilemap`level1`)
-roboRally.addCards(3, "+1")
-roboRally.addCards(2, "+2")
-roboRally.addCards(1, "+3")
-roboRally.addCards(1, "-1")
-roboRally.addCards(2, "V")
-roboRally.addCards(2, "H")
-roboRally.addCards(1, "U")
-roboRally.addCards(1, "S")
-roboRally.addCards(1, "P")
-// Jokeren. Du faar ogsaa en gratis hver gang nogen skyder
-// eller maser dig - og du bestemmer ikke selv hvad den goer.
-roboRally.addCards(1, "?")
 roboRally.startGame(mySprite, assets.tile`start`)
 // To robotter. Motoren kopierer din tegning og farver den om, en
 // farve til hver spiller, og giver hver robot sin egen trappe.
-// Du kan skrue op til 4 - saa deles spiller 2, 3 og 4 om den anden
-// skaerm og vaelger kort paa skift.
+// Du kan skrue op til 4 - så deles spiller 2, 3 og 4 om den anden
+// skærm og vælger kort på skift.
 roboRally.addRobots(2)
+// Ét hjerte er to hits. Skru op hvis banen er for hård.
+roboRally.startHealth(1)
 // Den der åbner flest kister vinder. Er der flere om førstepladsen
 // bliver det uafgjort.
 roboRally.treasure(assets.tile`chest`, assets.tile`chestOpen`)
-// Laserne tænder og slukker. Banen bytter de to felter hver gang den får sin
-// tur - altså efter hvert kort - så det tændte felt bliver til det slukkede og
-// omvendt. Det tændte har en regel længere nede, det slukkede har ingen, og så
-// skyder laseren hvert andet kort. Tæl med, og gå forbi når den er mørk.
-roboRally.blinkTiles(assets.tile`laserH`, assets.tile`laserHOff`)
-roboRally.blinkTiles(assets.tile`laserV`, assets.tile`laserVOff`)
 
 // ---------------------------------------------------------------
-// Kortene: et blok-hoved for hvert kort i bunken
+// Maskinerne på banen: de sover, indtil banen får sin tur
 // ---------------------------------------------------------------
-roboRally.onCardPlayed("+1", function (robot) {
+// Hvert felt her har to tegninger: en tændt og en slukket. De står
+// slukkede hele tiden mens I vælger kort, og vågner kun når banen
+// får sin tur. Trin-nummeret er rækkefølgen: FØRST kører båndene
+// (trin 1), BAGEFTER skyder laserne (trin 2) - så du bliver flyttet
+// først og skudt der, hvor du ender.
+roboRally.blinkTiles(assets.tile`conveyorRight`, assets.tile`conveyorRightOff`, 1)
+roboRally.blinkTiles(assets.tile`conveyorLeft`, assets.tile`conveyorLeftOff`, 1)
+roboRally.blinkTiles(assets.tile`conveyorUp`, assets.tile`conveyorUpOff`, 1)
+roboRally.blinkTiles(assets.tile`conveyorDown`, assets.tile`conveyorDownOff`, 1)
+roboRally.blinkTiles(assets.tile`laserH`, assets.tile`laserHOff`, 2)
+roboRally.blinkTiles(assets.tile`laserV`, assets.tile`laserVOff`, 2)
+
+// ---------------------------------------------------------------
+// Kortene: ét blok-hoved pr. kort. Navnet, hvor mange der er i
+// bunken, og hvad kortet gør - det hele ét sted.
+// ---------------------------------------------------------------
+roboRally.card("+1", 3, function (robot) {
     roboRally.move(1)
 })
-roboRally.onCardPlayed("+2", function (robot) {
+roboRally.card("+2", 2, function (robot) {
     roboRally.move(2)
 })
-roboRally.onCardPlayed("+3", function (robot) {
+roboRally.card("+3", 1, function (robot) {
     roboRally.move(3)
 })
-roboRally.onCardPlayed("-1", function (robot) {
+roboRally.card("-1", 1, function (robot) {
     roboRally.move(-1)
 })
-roboRally.onCardPlayed("V", function (robot) {
+roboRally.card("V", 2, function (robot) {
     roboRally.turnLeft()
 })
-roboRally.onCardPlayed("H", function (robot) {
+roboRally.card("H", 2, function (robot) {
     roboRally.turnRight()
 })
 // U for U-vending: et kort lavet af to kort vi allerede har
-roboRally.onCardPlayed("U", function (robot) {
+roboRally.card("U", 1, function (robot) {
     roboRally.turnLeft()
     roboRally.turnLeft()
 })
 // S for skyd
-roboRally.onCardPlayed("S", function (robot) {
+roboRally.card("S", 1, function (robot) {
     roboRally.shoot()
 })
-// ? for jokeren: et tilfaeldigt kort fra bunken
-roboRally.onCardPlayed("?", function (robot) {
+// Jokeren. Du får også en gratis hver gang nogen skyder eller maser
+// dig - og du bestemmer ikke selv hvad den gør.
+roboRally.card("?", 1, function (robot) {
     roboRally.randomAction()
 })
-roboRally.onCardPlayed("P", function (robot) {
+roboRally.card("P", 1, function (robot) {
     robot.sayText("PRUT!", 700)
     music.play(music.melodyPlayable(music.buzzer), music.PlaybackMode.InBackground)
 })
 
 // ---------------------------------------------------------------
-// Felterne: et blok-hoved for hvert felt du maler på banen
+// Felterne: ét blok-hoved for hvert felt du maler på banen
 // ---------------------------------------------------------------
-// Lava: to hits, og det er praecis nok til at slaa dig ihjel
+// Lava: to hits, og det er præcis nok til at slå dig ihjel
 roboRally.onLand(assets.tile`lava`, function (robot) {
     roboRally.takeHits(2)
 })
@@ -98,8 +99,7 @@ roboRally.onLand(assets.tile`hole`, function (robot) {
     roboRally.die()
 })
 
-// Transportbåndene: banen får sin egen tur efter hvert kort.
-// Fire felter, samme blok, hver sin retning i rullelisten.
+// Transportbåndene kører på trin 1 af banens tur.
 roboRally.onBetweenCards(assets.tile`conveyorRight`, function (robot) {
     roboRally.push(RoboDirection.Right)
 })
@@ -112,9 +112,7 @@ roboRally.onBetweenCards(assets.tile`conveyorUp`, function (robot) {
 roboRally.onBetweenCards(assets.tile`conveyorDown`, function (robot) {
     roboRally.push(RoboDirection.Down)
 })
-// Laserne fyrer mellem hvert kort: står du i strålen koster det et hit.
-// Kun de TÆNDTE felter har en regel - de slukkede gør ingenting, og det er
-// hele forskellen på de to tegninger.
+// Laserne skyder på trin 2, altså efter båndene har flyttet alle.
 roboRally.onBetweenCards(assets.tile`laserH`, function (robot) {
     roboRally.takeHits(1)
 })
