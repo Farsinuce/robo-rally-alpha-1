@@ -1,5 +1,12 @@
 // ---------------------------------------------------------------
-// Sæt spillet op
+// ROBO RALLY - lille udgave
+//
+// Spillet virker allerede: robotten kan koere frem og dreje til
+// hoejre, lava slaar dig ihjel, og den der aabner flest kister
+// vinder. Men det er ogsaa ALT den kan.
+//
+// Kig paa banen. Der er transportbaand, lasere og huller - og de
+// goer ingenting endnu. Det er din opgave.
 // ---------------------------------------------------------------
 let mySprite = sprites.create(img`
     . . . . . . f f f f . . . . . .
@@ -20,93 +27,38 @@ let mySprite = sprites.create(img`
     . . . . . . . . . . . . . . . .
     `, SpriteKind.Player)
 tiles.setCurrentTilemap(tilemap`level1`)
-roboRally.addCards(3, "+1")
-roboRally.addCards(2, "+2")
-roboRally.addCards(1, "+3")
-roboRally.addCards(1, "-1")
-roboRally.addCards(2, "V")
-roboRally.addCards(2, "H")
-roboRally.addCards(1, "U")
-roboRally.addCards(1, "S")
-roboRally.addCards(1, "P")
-// Jokeren. Du faar ogsaa en gratis hver gang nogen skyder
-// eller maser dig - og du bestemmer ikke selv hvad den goer.
-roboRally.addCards(1, "?")
+
+// Bunken. Der er kun to slags kort. Vil du have et kort der
+// drejer til venstre, saa skriv "V" her - og lav et blok-hoved
+// til det laengere nede.
+roboRally.addCards(5, "+1")
+roboRally.addCards(4, "H")
 roboRally.startGame(mySprite, assets.tile`start`)
-// To robotter. Motoren kopierer din tegning og farver den om, en
-// farve til hver spiller, og giver hver robot sin egen trappe.
-// Du kan skrue op til 4 - saa deles spiller 2, 3 og 4 om den anden
-// skaerm og vaelger kort paa skift.
+// To robotter. Del spillet og vaelg "host a multiplayer game",
+// saa faar spiller 1 sin egen skaerm og spiller 2 sin egen.
 roboRally.addRobots(2)
-// Den der åbner flest kister vinder. Er der flere om førstepladsen
-// bliver det uafgjort.
+// Den der aabner flest kister vinder. Er der flere om
+// foerstepladsen bliver det uafgjort.
 roboRally.treasure(assets.tile`chest`, assets.tile`chestOpen`)
 
 // ---------------------------------------------------------------
 // Kortene: et blok-hoved for hvert kort i bunken
 // ---------------------------------------------------------------
+// +1 for et skridt frem. Proev ogsaa "+2" og "-1".
 roboRally.onCardPlayed("+1", function (robot) {
     roboRally.move(1)
 })
-roboRally.onCardPlayed("+2", function (robot) {
-    roboRally.move(2)
-})
-roboRally.onCardPlayed("+3", function (robot) {
-    roboRally.move(3)
-})
-roboRally.onCardPlayed("-1", function (robot) {
-    roboRally.move(-1)
-})
-roboRally.onCardPlayed("V", function (robot) {
-    roboRally.turnLeft()
-})
+// H for hoejre. Et "V" kort ville se helt magen til ud.
 roboRally.onCardPlayed("H", function (robot) {
     roboRally.turnRight()
 })
-// U for U-vending: et kort lavet af to kort vi allerede har
-roboRally.onCardPlayed("U", function (robot) {
-    roboRally.turnLeft()
-    roboRally.turnLeft()
-})
-// S for skyd
-roboRally.onCardPlayed("S", function (robot) {
-    roboRally.shoot()
-})
-// ? for jokeren: et tilfaeldigt kort fra bunken
-roboRally.onCardPlayed("?", function (robot) {
-    roboRally.randomAction()
-})
-roboRally.onCardPlayed("P", function (robot) {
-    robot.sayText("PRUT!", 700)
-    music.play(music.melodyPlayable(music.buzzer), music.PlaybackMode.InBackground)
-})
 
 // ---------------------------------------------------------------
-// Felterne: et blok-hoved for hvert felt du maler på banen
+// Felterne: et blok-hoved for hvert felt du vil have til at virke
 // ---------------------------------------------------------------
-// Lava: to hits, og det er praecis nok til at slaa dig ihjel
+// Lava slaar dig ihjel. Du mister resten af din tur og kommer
+// igen paa den naermeste trappe. Hullerne paa banen goer stadig
+// ingenting - kan du give dem den samme regel?
 roboRally.onLand(assets.tile`lava`, function (robot) {
-    roboRally.takeHits(2)
-})
-roboRally.onLand(assets.tile`hole`, function (robot) {
     roboRally.die()
-})
-
-// Transportbåndene: banen får sin egen tur efter hvert kort.
-// Fire felter, samme blok, hver sin retning i rullelisten.
-roboRally.onBetweenCards(assets.tile`conveyorRight`, function (robot) {
-    roboRally.push(RoboDirection.Right)
-})
-roboRally.onBetweenCards(assets.tile`conveyorLeft`, function (robot) {
-    roboRally.push(RoboDirection.Left)
-})
-roboRally.onBetweenCards(assets.tile`conveyorUp`, function (robot) {
-    roboRally.push(RoboDirection.Up)
-})
-roboRally.onBetweenCards(assets.tile`conveyorDown`, function (robot) {
-    roboRally.push(RoboDirection.Down)
-})
-// Laseren fyrer mellem hvert kort: står du i strålen koster det et hit
-roboRally.onBetweenCards(assets.tile`laser`, function (robot) {
-    roboRally.takeHits(1)
 })
