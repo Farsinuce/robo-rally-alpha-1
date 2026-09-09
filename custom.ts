@@ -1922,38 +1922,46 @@ namespace roboRally {
         banner("PROGRAM", 1)
         if (splitScreens()) {
             // A screen each for player 1, and one shared by everybody else.
-            // Player 1 has the whole phase; the second screen is handed along,
-            // one kid at a time, and the camera goes with it.
             if (host) openProgram(host)
-            if (clients.length == 0) {
-                pauseUntil(function () { return windowShut(host) }, HOURGLASS + PROGRAM_IDLE)
-            }
-            for (let c of clients) {
-                programOwner = c
-                openProgram(c)
-                // More kids than screens, so the second screen is handed
-                // along - and the fifteen seconds start the moment it reaches
-                // you, because the rest of the table is now sitting watching
-                // you think. Each kid gets their own fresh fifteen; the clock
-                // is not inherited from whoever had the screen before.
+            if (clients.length <= 1) {
+                // Two screens, two hands, and NOBODY is waiting for anybody:
+                // both windows are open at once, so the phase ends when BOTH
+                // of them have shut, not when the first one does.
                 //
-                // With a single client nobody is waiting - two kids on two
-                // screens are choosing at the same time - so that case keeps
-                // the hourglass rule instead: nothing ticks until the first
-                // card of the phase goes down. Player 1 is on the clock
-                // alongside the first client either way, which is what
-                // forceReady(host) below already assumed; now their banner
-                // counts down the seconds they actually have.
-                if (clients.length > 1) {
-                    startClock(c)
-                    startClock(host)
+                // Ending it on the first was a real bug and a nasty one to be
+                // on the wrong end of: player 2 putting their fourth card down
+                // - or simply running out of time - filled player 1's program
+                // in for them at random, mid-thought, with seconds still on
+                // their clock. Finishing early is not a thing you should be
+                // able to do TO somebody.
+                const other = clients.length == 1 ? clients[0] : null
+                if (other) {
+                    programOwner = other
+                    openProgram(other)
                 }
-                pauseUntil(function () { return windowShut(c) }, HOURGLASS + PROGRAM_IDLE)
-                forceReady(c)
-                // Player 1's fifteen seconds ran alongside the first client's,
-                // so close their window as soon as that one is done rather
-                // than leaving a stale cursor blinking on the server screen.
-                if (host) forceReady(host)
+                pauseUntil(function () {
+                    return windowShut(host) && windowShut(other)
+                }, HOURGLASS + PROGRAM_IDLE)
+            } else {
+                // More kids than screens, so the second screen is handed along
+                // one at a time - and the fifteen seconds start the moment it
+                // reaches you, because the rest of the table is now sitting
+                // watching you think. Each kid gets their own fresh fifteen;
+                // the clock is not inherited from whoever had it before.
+                for (let c of clients) {
+                    programOwner = c
+                    openProgram(c)
+                    startClock(c)
+                    // Player 1 has had a screen to themselves since the phase
+                    // began, so their clock starts alongside the FIRST client
+                    // and is not restarted for each one after that.
+                    startClock(host)
+                    pauseUntil(function () { return windowShut(c) }, HOURGLASS + PROGRAM_IDLE)
+                    forceReady(c)
+                }
+                // ...and player 1 is not cut off by a client finishing early
+                // either. Their own fifteen seconds are their own.
+                pauseUntil(function () { return windowShut(host) }, HOURGLASS + PROGRAM_IDLE)
             }
         } else {
             // ONE screen, so one hand at a time - player 1 first, then the
