@@ -78,10 +78,14 @@ namespace roboRally {
     // Your turn starts the moment the camera reaches you. Three seconds is
     // long enough to press A and short enough that four kids keep moving.
     const TURN_TIMEOUT = 3000
-    // How long one player has to pick four cards before the engine picks the
-    // rest for them. Per player: in a three or four player game the client
-    // screen is handed on, and each kid gets their own fifteen seconds.
-    const PROGRAM_TIME = 15000
+    // The sand timer, and it is not running until somebody turns it. Fifteen
+    // seconds from the moment the FIRST program card of the phase goes down -
+    // the way a real Robo Rally table flips the hourglass - so nobody is under
+    // pressure before they have even read their hand.
+    const HOURGLASS = 15000
+    // ...but a timer nobody ever starts is a frozen table. If not one card has
+    // been committed in this long, the phase ends anyway.
+    const PROGRAM_IDLE = 45000
     // If nobody touches anything in the lobby, start anyway.
     const LOBBY_TIMEOUT = 90000
     // How long the lobby stays open before it will start a game by itself, so
@@ -126,6 +130,12 @@ namespace roboRally {
     const BOTTOM_ROW_Y = 112            // top edge of player 1's row
     const BANNER_H = 8
     const UI_Z = 90
+
+    // A five character readout of what each screen thinks is going on, drawn
+    // just above the card rows. Purely for working out what a live hosted
+    // game is doing, which is the one thing that cannot be tested offline.
+    // Set to false to take it off.
+    const SHOW_DEBUG = true
 
     // Arcade images have no alpha channel, so a card cannot be drawn half
     // transparent. What it can do is leave its middle empty and darken the
@@ -211,7 +221,8 @@ namespace roboRally {
 
         joined: boolean             // pressed A in the lobby
         ready: boolean              // four cards down, program committed
-        deadline: number            // when this robot's programming window shuts
+        open: boolean               // may edit its program right now
+        deadline: number            // when the sand runs out, 0 = not turned yet
         openedAt: number            // when it opened, for the grace window
         dead: boolean               // died this round, sits out the rest of it
         out: boolean                // never joined, so never on the board
@@ -244,6 +255,7 @@ namespace roboRally {
             this.injected = 0
             this.joined = false
             this.ready = false
+            this.open = false
             this.deadline = 0
             this.openedAt = 0
             this.dead = false
@@ -1296,6 +1308,7 @@ namespace roboRally {
         bot.program = []
         bot.selected = 0
         bot.ready = false
+        bot.open = false
         bot.deadline = 0
         drawRow(bot, -1, 0)
     }
@@ -1317,8 +1330,10 @@ namespace roboRally {
      * confirm button left there would otherwise be no way back at all.
      */
     function windowOpen(bot: Bot): boolean {
-        return phase == PHASE_PROGRAM && !bot.out
-            && bot.deadline > 0 && control.millis() < bot.deadline
+        if (phase != PHASE_PROGRAM || bot.out || !bot.open) return false
+        // deadline 0 means nobody has turned the hourglass yet, so there is no
+        // clock to be out of time against.
+        return bot.deadline == 0 || control.millis() < bot.deadline
     }
 
     /** ...and it still has room for another card. */
@@ -1372,6 +1387,7 @@ namespace roboRally {
             if (bot.program.length >= programSize(bot)) return
             if (bot.program.indexOf(bot.selected) >= 0) return
             bot.program.push(bot.selected)
+            turnHourglass()
             // The fourth card ends your turn. There is no confirm button: at
             // this age "press B when you are done" is one more thing to forget,
             // and it made every round wait for the slowest kid to remember.
@@ -1399,6 +1415,21 @@ namespace roboRally {
             // that it no longer confirms anything.
             undo(bot)
         })
+    }
+
+    /**
+     * Somebody has put their first program card down, so the sand starts
+     * running - for everybody whose window is open, not just for them. Until
+     * this happens there is no clock at all: a countdown that is already
+     * ticking while a nine year old is still reading their hand is not a
+     * countdown they can think in.
+     */
+    function turnHourglass() {
+        for (let b of playing) {
+            if (b.open && !b.out && b.deadline == 0) {
+                b.deadline = control.millis() + HOURGLASS
+            }
+        }
     }
 
     /** Move the cursor to the next card that is not already in the program. */
@@ -1582,7 +1613,7 @@ namespace roboRally {
                     if (inPlay(b) && !windowShut(b)) return false
                 }
                 return true
-            }, PROGRAM_TIME + 1000)
+            }, HOURGLASS + PROGRAM_IDLE)
         } else {
             // More kids than screens. Player 1 has their own and starts at
             // once; the second screen is handed along, one client at a time.
@@ -1590,7 +1621,7 @@ namespace roboRally {
             for (let c of clients) {
                 programOwner = c
                 openProgram(c)
-                pauseUntil(function () { return windowShut(c) }, PROGRAM_TIME + 1000)
+                pauseUntil(function () { return windowShut(c) }, HOURGLASS + PROGRAM_IDLE)
                 forceReady(c)
                 // Player 1's fifteen seconds ran alongside the first client's,
                 // so close their window as soon as that one is done rather
@@ -1605,7 +1636,8 @@ namespace roboRally {
     function openProgram(bot: Bot) {
         if (!bot || bot.out || bot.ready) return
         bot.openedAt = control.millis()
-        bot.deadline = bot.openedAt + PROGRAM_TIME
+        bot.open = true
+        bot.deadline = 0
         // The row is a cached image, and the cursor is only drawn while the
         // window is open - so it has to be rebuilt HERE. Without this a kid
         // sees no cursor at all until they happen to press left or right.
@@ -1614,7 +1646,11 @@ namespace roboRally {
 
     function windowShut(bot: Bot): boolean {
         if (!bot) return true
-        return bot.out || bot.ready || control.millis() > bot.deadline
+        if (bot.out || bot.ready) return true
+        // An unturned hourglass is not an expired one. Without this the phase
+        // ended the instant it began, because millis() > 0 is always true.
+        if (bot.deadline == 0) return false
+        return control.millis() > bot.deadline
     }
 
     /**
@@ -1633,6 +1669,7 @@ namespace roboRally {
             bot.program.push(free[randint(0, free.length - 1)])
         }
         bot.ready = true
+        bot.open = false
         bot.deadline = 0
         // Cards appearing out of nowhere is baffling unless you are told why -
         // and with three kids sharing the second screen it has to say WHOSE
@@ -1814,7 +1851,19 @@ namespace roboRally {
      * their cards while they are making the thing.
      */
     function splitScreens(): boolean {
-        return twoScreens && getOrigin() == "server"
+        if (!twoScreens) return false
+        // Two independent signals, because relying on the first one alone
+        // shipped a broken game: on a real host getOrigin() did NOT answer
+        // "server", every screen fell back to the one-screen layout, and
+        // player 2 was left looking at a board with no hand, no cursor and no
+        // banner. The extension posts the client image whether or not the
+        // origin says anything, so the split has to be decided some other way
+        // too - and "somebody actually joined over the network" is a better
+        // question anyway, because it is the thing we actually care about.
+        if (getOrigin() == "server") return true
+        return controller.player2.connected
+            || controller.player3.connected
+            || controller.player4.connected
     }
 
     /**
@@ -1858,6 +1907,7 @@ namespace roboRally {
     /** Whose robot the given screen is watching while everybody programs. */
     function screenOwner(server: boolean): Bot {
         if (server) {
+            if (!splitScreens()) return null
             for (let b of playing) if (inPlay(b) && b.player == 1) return b
             // No player 1 at the table, so the server screen has nothing of
             // its own to watch and may as well follow the client screen.
@@ -1944,24 +1994,60 @@ namespace roboRally {
     }
 
     function drawUi(target: Image, isServer: boolean) {
-        const split = splitScreens()
-        // Without a split there is only one picture worth drawing, and it is
-        // the server's; the client image is rendered but nobody ever sees it.
-        if (!split && !isServer) return
-        if (phase == PHASE_PROGRAM && split) {
-            // Your hand, on your screen, and nobody else's.
-            const owner = screenOwner(isServer)
-            if (owner) paintRow(target, owner, BOTTOM_ROW_Y)
-        } else if (phase == PHASE_PROGRAM || phase == PHASE_EXECUTE) {
-            // Either one screen for everybody, or a round in progress: the
-            // programs are committed and public by then, and seeing all four
-            // rows is how you follow what is about to happen.
+        if (phase == PHASE_PROGRAM) {
+            if (!isServer) {
+                // The client image is ONLY ever seen by clients, so it always
+                // draws the client view. It must never be gated on whether the
+                // engine thinks the game is hosted: getting that wrong once
+                // shipped a player 2 staring at a board with no hand, no
+                // cursor and no banner, who then could not choose a card and
+                // had their program filled in for them when the time ran out.
+                const owner = screenOwner(false)
+                if (owner) paintRow(target, owner, BOTTOM_ROW_Y)
+            } else if (splitScreens()) {
+                // Your hand, on your screen, and nobody else's.
+                const owner = screenOwner(true)
+                if (owner) paintRow(target, owner, BOTTOM_ROW_Y)
+            } else {
+                // One screen for everybody: the editor and hardware fallback.
+                for (let b of playing) {
+                    if (b.rowY < 0 || b.out) continue
+                    paintRow(target, b, b.rowY)
+                }
+            }
+        } else if (phase == PHASE_EXECUTE) {
+            // The programs are committed and public by now, and seeing all
+            // four rows is how you follow what is about to happen.
             for (let b of playing) {
                 if (b.rowY < 0 || b.out) continue
                 paintRow(target, b, b.rowY)
             }
         }
         drawBanner(target, isServer)
+        if (SHOW_DEBUG) drawDebug(target, isServer)
+    }
+
+    /**
+     * Five characters: which screen this is, whether the engine is splitting
+     * them, who owns the client screen, what the runtime says our multiplayer
+     * role is, and whether anybody has joined over the network. Everything the
+     * offline tests cannot tell us, on the one screen that can.
+     */
+    function drawDebug(target: Image, isServer: boolean) {
+        let top = BOTTOM_ROW_Y
+        for (let b of playing) if (b.rowY >= 0 && b.rowY < top) top = b.rowY
+        const y = top - 7
+        if (y < BANNER_H) return
+        const origin = getOrigin()
+        const joined = controller.player2.connected
+            || controller.player3.connected || controller.player4.connected
+        const text = (isServer ? "S" : "C")
+            + (splitScreens() ? "+" : "-")
+            + (programOwner ? "" + programOwner.player : "-")
+            + (origin == "server" ? "s" : (origin == "client" ? "c" : "?"))
+            + (joined ? "n" : "-")
+        plateAt(target, 1, y - 1, text.length)
+        target.print(text, 2, y, 5, image.font5)
     }
 
     function paintRow(target: Image, b: Bot, y: number) {
@@ -2030,7 +2116,11 @@ namespace roboRally {
      * the text the same courtesy without blacking out the whole top row.
      */
     function plate(target: Image, x: number, chars: number) {
-        target.fillRect(x, 0, chars * image.font5.charWidth + 1, 7, 15)
+        plateAt(target, x, 0, chars)
+    }
+
+    function plateAt(target: Image, x: number, y: number, chars: number) {
+        target.fillRect(x, y, chars * image.font5.charWidth + 1, 7, 15)
     }
 
     /**
@@ -2039,16 +2129,23 @@ namespace roboRally {
      * two screens say different things, which is the point of having two.
      */
     function programLine(isServer: boolean): BannerLine {
-        if (!splitScreens()) {
+        // Same rule as drawUi: the client image always speaks to the clients.
+        if (isServer && !splitScreens()) {
+            let any = false
             let latest = 0
             for (let b of playing) {
-                if (programming(b) && b.deadline > latest) latest = b.deadline
+                if (!programming(b)) continue
+                any = true
+                if (b.deadline > latest) latest = b.deadline
             }
-            if (latest == 0) return new BannerLine("KLAR", 1)
+            if (!any) return new BannerLine("KLAR", 1)
+            // No sand running yet: say what to do, not how long is left.
+            if (latest == 0) return new BannerLine("VAELG KORT", 1)
             return new BannerLine("VAELG " + secondsLeft(latest), 1)
         }
-        const owner = screenOwner(isServer)
+        const owner = isServer ? screenOwner(true) : programOwner
         if (owner && programming(owner)) {
+            if (owner.deadline == 0) return new BannerLine("VAELG KORT", owner.color)
             return new BannerLine("VAELG " + secondsLeft(owner.deadline), owner.color)
         }
         // Not your turn: say whose it is, so the kids sharing the second
