@@ -8,6 +8,33 @@ A MakeCode Arcade project (PXT target `arcade`, editor 4.1.17) implementing a ti
 
 It is teaching material for Coding Pirates (volunteer coding club, kids aged 9-11). The kids work in the Blocks view; the adults maintain the engine. The season plan (real RFID cards read by a micro:bit, then multiplayer, then a Minecraft port) and the reasoning behind the current design are in `historical-claude-correspondance.md`. Read it before proposing features so they fit the arc.
 
+## Two branches: the finished game and the one the kids build
+
+The repo ships the same game twice, and the difference is **`main.ts` and the project name, nothing else**.
+
+- **`master`** - the finished game. Every card, every tile rule, all the blocks pre-built. This is the reference: what the kids are working towards, and what the adults demo.
+- **`lite`** - the starting point. Two card types (`+1` and `H`), one hazard (lava kills you) and the treasure win condition. That is all. The level still has conveyor belts, lasers and holes painted on it, and in `lite` they do **nothing** - which is the point. The map is the to-do list, and every tile a kid brings to life is one `on ... between cards` hat they wrote themselves. Building the rest of `master` out of `lite` *is* the course.
+
+Import either from the same URL:
+
+```
+https://github.com/Farsinuce/robo-rally-alpha-1          <- master, the finished game
+https://github.com/Farsinuce/robo-rally-alpha-1#lite     <- lite, the starting point
+```
+
+`pxt.github.parseRepoId` pulls the part after `#` out as a tag, and `tagToShaAsync` asks for `refs/tags/<tag>` first and falls back to `refs/heads/<tag>` - so a plain branch name resolves. If a MakeCode version ever stops honouring it, the fallback is to import the repo normally and switch branch in the editor's GitHub pane.
+
+**Keeping them in sync.** `custom.ts`, `tilemap.g.*` and this file must be identical on both branches; only `main.ts` and the `name` in `pxt.json` differ. So an engine change lands on `master` and is merged down:
+
+```
+git checkout lite
+git merge master
+git checkout --ours main.ts pxt.json   # keep lite's program and name
+git add main.ts pxt.json && git commit
+```
+
+Never fix the engine on `lite` - it will be overwritten. And never let the two `main.ts` files converge: if `lite` grows every block, it has stopped being a starting point.
+
 ## Commands
 
 Day-to-day editing happens in the browser at https://arcade.makecode.com (Import -> Import URL -> this repo, or open the project and use its GitHub sync). To work locally:
