@@ -66,6 +66,13 @@ namespace roboRally {
     const ACT_PAUSE = 500       // action ends -> bubble comes down
     const GAP_PAUSE = 500       // bubble down -> next robot
     const BOARD_PAUSE = 500     // either side of the board's own turn
+    // The board's turn is worth watching only when it is happening to
+    // somebody - and when it is, it is worth watching properly. The camera
+    // goes to the robot the belt or the laser is about to act on, waits, acts,
+    // and waits again so that being carried or being shot is something a kid
+    // SEES rather than something they work out afterwards from the banner.
+    const BOARD_FOCUS = 450     // camera reaches the robot -> the board acts
+    const BOARD_ACT = 550       // the board has acted -> on to the next robot
     const DEATH_PAUSE = 400
     const STEP_PAUSE = 220      // between two tiles of the same move
     const SHOT_PAUSE = 60       // per tile of a shot
@@ -372,6 +379,8 @@ namespace roboRally {
     // again every frame, because the same project is built in the editor on
     // one screen and played online on two.
     let twoScreens = false
+    // ...and once this game has been hosted it stays hosted. See splitScreens.
+    let hosted = false
     // Set when "play with N robots" ran before "start Robo Rally".
     let wantRobots = 0
 
@@ -1384,9 +1393,14 @@ namespace roboRally {
         // slow enough for a nine year old to see the two as separate events
         // rather than as one thing that happened to them.
         for (let s = 1; s <= MAX_BOARD_STEPS; s++) {
+            // Nobody is standing on any of this step's machines, so it would
+            // light up for no one: it does not light up at all. The question
+            // is asked again for every step rather than once for the turn,
+            // because step 1 is exactly what carries people into the step 2
+            // lasers - the belts can make the lasers worth running.
+            if (!stepBusy(s)) continue
             const lit = pairsInStep(s)
             const rules = rulesInStep(s)
-            if (lit.length == 0 && rules.length == 0) continue
             if (lit.length > 0) {
                 for (let i of lit) recolourTiles(blinkOff[i], blinkOn[i])
                 pause(BOARD_PAUSE)
@@ -1421,6 +1435,46 @@ namespace roboRally {
         return out
     }
 
+    /**
+     * The drawing a tile is wearing at this moment. Machines sleep except
+     * inside their own step, so a rule written against the LIT tile - the one
+     * the kid painted, and the only one they ever see in the tile picker - has
+     * to be looked for as its sleeping twin whenever the question is asked
+     * before the step has begun.
+     */
+    function asleepImage(tile: Image): Image {
+        for (let i = 0; i < blinkOn.length; i++) if (blinkOn[i] == tile) return blinkOff[i]
+        return tile
+    }
+
+    /** Is anybody standing where this step's rules would reach them? */
+    function stepBusy(step: number): boolean {
+        if (!game.currentScene().tileMap) return false
+        const rules = rulesInStep(step)
+        if (rules.length == 0) return false
+        for (let bot of playing) {
+            if (bot.dead || bot.out) continue
+            const loc = bot.sprite.tilemapLocation()
+            for (let i of rules) {
+                if (tiles.tileAtLocationEquals(loc, asleepImage(betweenTiles[i]))) return true
+            }
+        }
+        return false
+    }
+
+    /**
+     * True when the board has something to say this register. A belt nobody is
+     * standing on and a laser nobody is standing in are not an event: they
+     * used to light up, wait, do nothing to anybody, and go dark again - four
+     * times a round, every round, whether or not a single robot was near them.
+     * Skipping that outright is most of what made the board's turn feel slow,
+     * and it means the beats below can afford to be slower.
+     */
+    function boardBusy(): boolean {
+        for (let s = 1; s <= MAX_BOARD_STEPS; s++) if (stepBusy(s)) return true
+        return false
+    }
+
     function stepOfTile(tile: Image): number {
         for (let i = 0; i < blinkOn.length; i++) if (blinkOn[i] == tile) return blinkStep[i]
         return 1
@@ -1453,6 +1507,21 @@ namespace roboRally {
             const bot = actors[k]
             if (bot.dead || bot.out) continue
             const loc = tiles.getTileLocation(atCol[k], atRow[k])
+            // Is the board going to do anything to THIS robot? A robot
+            // standing on plain floor is not part of this step, and must not
+            // cost it a camera move and a second of everybody's attention.
+            let touched = false
+            for (let i of rules) {
+                if (tiles.tileAtLocationEquals(loc, betweenTiles[i])) { touched = true; break }
+            }
+            if (!touched) continue
+            // The camera goes to whoever is about to be carried or shot -
+            // both screens, the same as a robot's own turn, because the board
+            // taking a turn is a turn like any other and everybody should be
+            // watching the same thing.
+            centerOn(true, bot)
+            if (twoScreens) centerOn(false, bot)
+            pause(BOARD_FOCUS)
             landBudget = MAX_TILE_CHAIN
             for (let i of rules) {
                 if (tiles.tileAtLocationEquals(loc, betweenTiles[i])) {
@@ -1463,6 +1532,7 @@ namespace roboRally {
                 }
                 if (bot.dead || bot.out) break
             }
+            pause(BOARD_ACT)
         }
         current = previous
     }
@@ -1663,6 +1733,17 @@ namespace roboRally {
         }
     }
 
+    /**
+     * Turn ONE robot's hourglass. This is what happens when the shared screen
+     * is handed to the next kid: the table is waiting on them, so their
+     * fifteen seconds start there and then rather than when they get round to
+     * putting a card down. Never restarts a clock that is already running.
+     */
+    function startClock(bot: Bot) {
+        if (!bot || bot.out || !bot.open || bot.deadline != 0) return
+        bot.deadline = control.millis() + HOURGLASS
+    }
+
     /** Move the cursor to the next card that is not already in the program. */
     function nextFreeCard(bot: Bot) {
         for (let i = 1; i <= bot.hand.length; i++) {
@@ -1842,6 +1923,23 @@ namespace roboRally {
             for (let c of clients) {
                 programOwner = c
                 openProgram(c)
+                // More kids than screens, so the second screen is handed
+                // along - and the fifteen seconds start the moment it reaches
+                // you, because the rest of the table is now sitting watching
+                // you think. Each kid gets their own fresh fifteen; the clock
+                // is not inherited from whoever had the screen before.
+                //
+                // With a single client nobody is waiting - two kids on two
+                // screens are choosing at the same time - so that case keeps
+                // the hourglass rule instead: nothing ticks until the first
+                // card of the phase goes down. Player 1 is on the clock
+                // alongside the first client either way, which is what
+                // forceReady(host) below already assumed; now their banner
+                // counts down the seconds they actually have.
+                if (clients.length > 1) {
+                    startClock(c)
+                    startClock(host)
+                }
                 pauseUntil(function () { return windowShut(c) }, HOURGLASS + PROGRAM_IDLE)
                 forceReady(c)
                 // Player 1's fifteen seconds ran alongside the first client's,
@@ -1975,12 +2073,14 @@ namespace roboRally {
                 if (checkEnd()) return
             }
             // The board gets the same rhythm: say what is about to happen, let
-            // it happen, then a beat before the next register. But only if the
-            // kid has actually given the board something to do - in the
-            // starting project there is not one between-cards rule, and a
-            // silent BANEN pause on every register is a second of nothing,
-            // four times a round, in the version aimed at beginners.
-            if (betweenTiles.length > 0 || blinkOn.length > 0) {
+            // it happen, then a beat before the next register. But only when
+            // the board really is about to do something to somebody. Two
+            // things would otherwise buy a silent second: a starting project
+            // with no between-cards rule at all, and - far more often - a
+            // register in which every robot happened to end up on plain
+            // floor. boardBusy() covers both, so BANEN now means "watch
+            // this", and the beats inside it can be slow enough to follow.
+            if (boardBusy()) {
                 banner("BANEN", 1)
                 pause(BOARD_PAUSE)
                 boardPhase()
@@ -2101,7 +2201,16 @@ namespace roboRally {
         // player's cards, answering false when there are two only shows player
         // 1 more than they should see, and the client image is drawn
         // unconditionally either way. So ask the strong question only.
-        return getOrigin() == "server"
+        //
+        // It is asked every frame but LATCHED, because the answer can only
+        // travel one way: a game that has ever been hosted is hosted for the
+        // rest of its life. A single frame in which the shim answered
+        // anything else would otherwise collapse two screens back into one
+        // in the middle of a round - and one screen means strict turns and
+        // one hand drawn on both, which is exactly what player 2 looking at
+        // player 1's cards would look like from the sofa.
+        if (getOrigin() == "server") hosted = true
+        return hosted
     }
 
     /**
@@ -2145,9 +2254,18 @@ namespace roboRally {
             for (let b of playing) if (inPlay(b) && b.player == 1) return b
             // No player 1 at the table, so the server screen has nothing of
             // its own to watch and may as well follow the client screen.
+            return programOwner
         }
-        // The client screen, and the single screen of an unhosted game, both
-        // belong to whoever is choosing right now.
+        // The client image belongs to players 2, 3 and 4 and to nobody else,
+        // so player 1's hand is never painted on it - not even in the frames
+        // where the engine believes there is only one screen. A private hand
+        // has exactly one thing to guarantee, and that guarantee should rest
+        // on the drawing rather than on the phase machinery being right about
+        // how many screens exist. When it is player 1's turn on a shared
+        // screen the others get the board and the banner, which says whose
+        // turn it is; they get their own hand when their own turn comes.
+        if (!server && programOwner && programOwner.player == 1) return null
+        // Otherwise a screen belongs to whoever is choosing on it right now.
         return programOwner
     }
 
