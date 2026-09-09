@@ -9,6 +9,11 @@
 // tilemap-editoren ligger der ogsaa transportbaand, lasere og
 // huller - du skal bare male dem ind. Men de goer ingenting
 // foer DU skriver reglen for dem. Det er hele opgaven.
+//
+// Flere af felterne findes to gange: en TAENDT og en SLUKKET
+// udgave (laserH og laserHOff, conveyorRight og
+// conveyorRightOff, og saa videre). Med blokken "... og ...
+// skiftes" bytter banen dem hver gang den faar sin tur.
 // ---------------------------------------------------------------
 let mySprite = sprites.create(img`
     . . . . . . f f f f . . . . . .
@@ -64,6 +69,11 @@ roboRally.onCardPlayed("H", function (robot) {
 // Naar du har malet et hul paa banen kan du give det den samme
 // regel. Og et transportbaand faar sin egen slags blok:
 // "naar robot staar paa ... mellem kort" + "skub robot".
+//
+// En laser er den samme slags blok: "naar robot staar paa
+// laserH mellem kort" + "robot mister 1 hits". Vil du have den
+// til at blinke, saa saet ogsaa "laserH og laserHOff skiftes"
+// op i starten - saa skyder den kun hvert andet kort.
 roboRally.onLand(assets.tile`lava`, function (robot) {
     roboRally.die()
 })
