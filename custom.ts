@@ -498,8 +498,9 @@ namespace roboRally {
 
     /**
      * Two drawings of the same thing: switched on, and switched off. Every
-     * time the board takes its turn - once after every card - each $on tile on
-     * the map turns into $off, and each $off turns back into $on.
+     * time the board takes its turn - once after every card - every switched
+     * on tile turns into the switched off one, and every switched off tile
+     * lights up again.
      *
      * Give the lit one a rule with "on robot is on ... between cards" and give
      * the dark one no rule at all, and you have a laser that fires on every
@@ -707,10 +708,10 @@ namespace roboRally {
     }
 
     /**
-     * Turn every $from tile on the whole map into $to, right now. This is how
-     * a switch works: put it inside "on robot lands on", paint the door as one
-     * tile shut and another tile open, and standing on the switch opens every
-     * door at once.
+     * Change every tile of the first kind, everywhere on the map, into a tile
+     * of the second kind - right now. This is how a switch works: put it
+     * inside "on robot lands on", paint the door as one tile shut and another
+     * tile open, and standing on the switch opens every door at once.
      * @param from the tile to look for
      * @param to what to turn it into
      */
