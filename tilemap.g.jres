@@ -52,10 +52,40 @@
         "tilemapTile": true,
         "displayName": "conveyorLeft"
     },
+    "conveyorUp": {
+        "data": "hwQQABAAAADMzMzMzMzMzLu7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7W7W7u1W7u7tVu7tbtbu7W7W7u1W7u7tVu7tbtbu7u1W7u1u1u7u7W7W7u1W7u7u7Vbu7W7W7u7tbtbu7Vbu7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7vMzMzMzMzMzA==",
+        "mimeType": "image/x-mkcd-f4",
+        "tilemapTile": true,
+        "displayName": "conveyorUp"
+    },
+    "conveyorDown": {
+        "data": "hwQQABAAAADMzMzMzMzMzLu7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7tVu7tbtbu7u1u1u7tVu7u7u1W7u1u1u7u7W7W7u1W7u7tbtbu7Vbu7u1W7u1u1u7tbtbu7Vbu7u1W7u1u1u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7vMzMzMzMzMzA==",
+        "mimeType": "image/x-mkcd-f4",
+        "tilemapTile": true,
+        "displayName": "conveyorDown"
+    },
+    "chest": {
+        "data": "hwQQABAAAAAAu7u7y7y7C7Du7u677M6760Tk7rvs7rtLRETuu+zuC0tERO677O4LS0RE7rvs7gtLRETuu8vuC0tERO7NvO4LS0RE7s287gtLRETuu8vuC0tERO677O4LS0RE7rvs7gtLRETuu+zuC+tE5O677O67sO7u7rvszrsAu7u7y7y7Cw==",
+        "mimeType": "image/x-mkcd-f4",
+        "tilemapTile": true,
+        "displayName": "chest"
+    },
+    "chestOpen": {
+        "data": "hwQQABAAAACwuwu7u7u7C+vuu8zM6867S+S7zMzr7rtLRLvMzOvuC0tEu8zM6+4LS0S7zMzr7gtLRLvLzOvuC0tEzbzM6+4LS0TNvMzr7gtLRLvLzOvuC0tEu8zM6+4LS0S7zMzr7gtLRLvMzOvuC0vku8zM6+67S+67zMzrzruwuwu7u7u7Cw==",
+        "mimeType": "image/x-mkcd-f4",
+        "tilemapTile": true,
+        "displayName": "chestOpen"
+    },
+    "laser": {
+        "data": "hwQQABAAAADMzLxbtcvMzMzMvLu7y8zMzMzMKqLMzMzMzMwqoszMzMzMzCqizMzMzMzMKqLMzMzMzMwqoszMzMzMzCqizMzMzMzMKqLMzMzMzMwqoszMzMzMzCqizMzMzMzMKqLMzMzMzMwqoszMzMzMzCqizMzMzMy8u7vLzMzMzLxbtcvMzA==",
+        "mimeType": "image/x-mkcd-f4",
+        "tilemapTile": true,
+        "displayName": "laser"
+    },
     "level1": {
         "id": "level1",
         "mimeType": "application/mkcd-tilemap",
-        "data": "MTAwYTAwMDcwMDAxMDEwMTAxMDEwMTAxMDEwMTAxMDEwNTAxMDEwMTAxMDEwMTAxMDEwMTAxMDMwMjA2MDYwMjAzMDEwMTAxMDEwNzA3MDQwNDA4MDgwMTAxMDEwMTAzMDIwNjA2MDIwMzAxMDEwMTAxMDEwMTAxMDEwMTAxMDUwMTAxMDEwMTAxMDEwMTAxMDEwMTAxMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDIwMDAwMjAwMDAwMDAwMDAwMDAwMjAwMDAyMDAwMDAwMDAwMDAwMDAwMDAwMDAwMA==",
+        "data": "MTAxNDAwMGUwMDAxMDEwMTAxMDEwMTAxMDEwMTAxMDEwMTAxMDEwMTAxMDEwMTAxMDEwMTA1MDEwMTAxMDEwMTAxMDIwMjAyMDIwMTAxMDEwMTAxMDEwNTAxMDEwMTAxMDEwMTBiMDEwMTAyMDEwMTAyMDEwMTBiMDEwMTAxMDEwMTAxMDEwMjAyMDEwMTAxMDEwMTAxMDEwMTAxMDEwMTAxMDIwMjAxMDEwMTAxMDIwMTA3MDcwNzA3MDEwMzAzMDEwODA4MDgwODAxMDIwMTAxMDEwMTAxMGEwMTAxMDEwMTAxMDMwMzAxMDEwMTAxMDEwOTAxMDEwMTAxMGQwMTBhMDEwMTBiMDEwMTAxMDEwMTAxMGIwMTAxMDkwMTBkMDEwMTBkMDEwYTAxMDEwMTAxMDEwMTAxMDEwMTAxMDEwMTA5MDEwZDAxMDEwMTAxMGEwMTAxMGIwMTAxMDEwMTAxMDEwYjAxMDEwOTAxMDEwMTAxMDEwMTAxMDEwMTAxMDEwMTA2MDYwMTAxMDEwMTAxMDEwMTAxMDEwMTAxMDIwMTA3MDcwNzA3MDEwNjA2MDEwODA4MDgwODAxMDIwMTAxMDEwMTAyMDIwMTAxMDEwMTAxMDEwMTAxMDEwMTAxMDEwMjAyMDEwMTAxMDEwMTAxMDEwYjAxMDEwMjAxMDEwMjAxMDEwYjAxMDEwMTAxMDEwMTA1MDEwMTAxMDEwMTAxMDIwMjAyMDIwMTAxMDEwMTAxMDEwNTAxMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDIyMjIwMDAwMDAwMDAwMDAwMDAwMDIyMDAwMDAwMDAwMDAyMjAwMDAwMDAwMDAwMDIyMDAwMDAyMDAwMDAwMDAwMDAwMjAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAyMDAwMDAwMDAwMDAwMjAwMDAwMjIwMDAwMDAwMDAwMDAyMjAwMDAwMDAwMDAwMjIwMDAwMDAwMDAwMDAwMDAwMDIyMjIwMDAwMDAwMA==",
         "tileset": [
             "myTiles.transparency16",
             "myTiles.floor",
@@ -65,7 +95,12 @@
             "myTiles.start",
             "myTiles.hole",
             "myTiles.conveyorRight",
-            "myTiles.conveyorLeft"
+            "myTiles.conveyorLeft",
+            "myTiles.conveyorUp",
+            "myTiles.conveyorDown",
+            "myTiles.chest",
+            "myTiles.chestOpen",
+            "myTiles.laser"
         ],
         "displayName": "level1"
     },

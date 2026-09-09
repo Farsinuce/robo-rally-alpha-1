@@ -30,6 +30,12 @@ roboRally.addCards(1, "U")
 roboRally.addCards(1, "S")
 roboRally.addCards(1, "P")
 roboRally.startGame(mySprite, assets.tile`start`)
+// Fire robotter. Motoren kopierer din tegning og farver den om,
+// en farve til hver spiller, og giver hver robot sin egen trappe.
+roboRally.addRobots(4)
+// Den der åbner flest kister vinder. Er der flere om førstepladsen
+// bliver det uafgjort.
+roboRally.treasure(assets.tile`chest`, assets.tile`chestOpen`)
 
 // ---------------------------------------------------------------
 // Kortene: et blok-hoved for hvert kort i bunken
@@ -75,15 +81,22 @@ roboRally.onLand(assets.tile`lava`, function (robot) {
 roboRally.onLand(assets.tile`hole`, function (robot) {
     roboRally.die()
 })
-roboRally.onLand(assets.tile`goal`, function (robot) {
-    roboRally.win()
-})
 
 // Transportbåndene: banen får sin egen tur efter hvert kort.
-// To felter, samme blok, hver sin retning i rullelisten.
+// Fire felter, samme blok, hver sin retning i rullelisten.
 roboRally.onBetweenCards(assets.tile`conveyorRight`, function (robot) {
     roboRally.push(RoboDirection.Right)
 })
 roboRally.onBetweenCards(assets.tile`conveyorLeft`, function (robot) {
     roboRally.push(RoboDirection.Left)
+})
+roboRally.onBetweenCards(assets.tile`conveyorUp`, function (robot) {
+    roboRally.push(RoboDirection.Up)
+})
+roboRally.onBetweenCards(assets.tile`conveyorDown`, function (robot) {
+    roboRally.push(RoboDirection.Down)
+})
+// Laseren fyrer mellem hvert kort: står du i strålen koster det et liv
+roboRally.onBetweenCards(assets.tile`laser`, function (robot) {
+    roboRally.changeLives(-1)
 })
